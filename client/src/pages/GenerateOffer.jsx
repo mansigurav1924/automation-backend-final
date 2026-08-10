@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import api from '../services/api';
 import toast from 'react-hot-toast';
 import { Send, Loader2, Eye, X, Mail, ChevronDown } from 'lucide-react';
+import { getAuthUser } from '../utils/auth';
 
 const containerVariants = {
   hidden: { opacity: 0 },
@@ -16,8 +17,9 @@ const itemVariants = {
 };
 
 export default function GenerateOffer() {
+  const user = getAuthUser();
   const { register, handleSubmit, formState: { errors }, reset, watch, setValue, getValues } = useForm({
-    defaultValues: { duration: "3", mode: "Remote", compensation: "Unpaid Internship" }
+    defaultValues: { duration: "3", mode: "Remote", compensation: "Unpaid Internship", department: user?.role === 'admin' ? "" : (user?.department || "") }
   });
   const [status, setStatus]           = useState('idle');
   const [previewPdf, setPreviewPdf]   = useState(null);
@@ -174,8 +176,21 @@ export default function GenerateOffer() {
 
             {/* Department */}
             <Field label="Department">
-              <input type="text" {...register("department")}
-                className="form-input" placeholder="Engineering" />
+              {user?.role === 'admin' ? (
+                <select {...register("department", { required: "Department is required" })} className="form-input" style={{ appearance: 'none' }}>
+                  <option value="" disabled>Select your department</option>
+                  <option value="Social Media Intern">Social Media Intern</option>
+                  <option value="Sales Development Intern">Sales Development Intern</option>
+                  <option value="HR Intern">HR Intern</option>
+                  <option value="AI Engineering Intern">AI Engineering Intern</option>
+                  <option value="Business Analyst Intern">Business Analyst Intern</option>
+                  <option value="Content Creator Intern">Content Creator Intern</option>
+                  <option value="Full Stack Intern">Full Stack Intern</option>
+                </select>
+              ) : (
+                <input type="text" {...register("department")}
+                  className="form-input" placeholder="Engineering" readOnly style={{ opacity: 0.65, cursor: 'not-allowed' }} />
+              )}
             </Field>
 
             {/* Duration */}

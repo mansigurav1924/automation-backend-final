@@ -1,13 +1,10 @@
 const crypto = require('crypto');
 const supabase = require('../config/supabaseClient');
-const sheets = require('../config/googleSheetsClient');
 const { logAudit } = require('../utils/auditLogger');
+const { syncOfferToSheet, syncRejectionToSheet } = require('../utils/sheetsSync');
 
 /**
  * Creates a unique response token for an offer and stores it in Supabase
- * @param {string} offerId 
- * @param {string} validUntil - ISO date string
- * @returns {string} - The generated token
  */
 const createResponseToken = async (offerId, validUntil) => {
   if (!supabase) return null;
@@ -35,13 +32,13 @@ const getOfferByToken = async (req, res) => {
   if (!supabase) return res.status(503).json({ error: 'Database not configured' });
 
   try {
-    const { data: tokenData, error } = await supabase
+    const { data: tokenData, error: tokenError } = await supabase
       .from('response_tokens')
       .select('*')
       .eq('token', token)
       .single();
 
-    if (error || !tokenData) {
+    if (tokenError || !tokenData) {
       return res.status(404).json({ error: 'Invalid or expired link' });
     }
 
@@ -49,28 +46,26 @@ const getOfferByToken = async (req, res) => {
       return res.status(400).json({ error: 'This offer has expired.' });
     }
 
-    // Now fetch the offer details from Google Sheets
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: process.env.GOOGLE_SHEET_ID,
-      range: 'Sheet1!A:M',
-    });
+    // Now fetch the offer details from Supabase
+    const { data: offerData, error: offerError } = await supabase
+      .from('offers')
+      .select('*, users!generated_by(email)')
+      .eq('id', tokenData.offer_id)
+      .single();
     
-    const rows = response.data.values || [];
-    const matchRow = rows.find(r => r[10] === tokenData.offer_id);
-    
-    if (!matchRow) return res.status(404).json({ error: 'Offer not found' });
+    if (offerError || !offerData) return res.status(404).json({ error: 'Offer not found' });
     
     const offerDetails = {
-      id: matchRow[10],
-      candidate_name: matchRow[0],
-      designation: matchRow[2],
-      department: matchRow[3],
-      start_date: matchRow[4],
-      end_date: matchRow[5],
-      mode: matchRow[6],
-      compensation: matchRow[7],
-      valid_until: matchRow[11],
-      status: matchRow[9],
+      id: offerData.id,
+      candidate_name: offerData.candidate_name,
+      designation: offerData.designation,
+      department: offerData.department,
+      start_date: offerData.start_date,
+      end_date: offerData.end_date,
+      mode: offerData.mode,
+      compensation: offerData.compensation,
+      valid_until: offerData.valid_until,
+      status: offerData.status,
       responded_at: tokenData.responded_at,
       response: tokenData.response
     };
@@ -95,17 +90,28 @@ const submitResponse = async (req, res) => {
 
   try {
     // 1. Verify token
-    const { data: tokenData, error } = await supabase
+    const { data: tokenData, error: tokenError } = await supabase
       .from('response_tokens')
       .select('*')
       .eq('token', token)
       .single();
 
-    if (error || !tokenData) return res.status(404).json({ error: 'Invalid link' });
+    if (tokenError || !tokenData) return res.status(404).json({ error: 'Invalid link' });
     if (tokenData.response) return res.status(400).json({ error: 'You have already responded to this offer.' });
     if (new Date() > new Date(tokenData.expires_at)) return res.status(400).json({ error: 'This offer has expired.' });
 
-    // 2. Update token record
+    // 2. Fetch Offer to update
+    const { data: offerData, error: offerFetchError } = await supabase
+      .from('offers')
+      .select('*, users!generated_by(email)')
+      .eq('id', tokenData.offer_id)
+      .single();
+      
+    if (offerFetchError || !offerData) throw offerFetchError || new Error('Offer not found');
+
+    const newStatus = candidateResponse === 'accepted' ? 'Accepted' : 'Rejected';
+
+    // 3. Update token record
     const { error: updateError } = await supabase
       .from('response_tokens')
       .update({
@@ -116,30 +122,40 @@ const submitResponse = async (req, res) => {
 
     if (updateError) throw updateError;
 
-    // 3. Update Google Sheets status
-    const sheetResponse = await sheets.spreadsheets.values.get({
-      spreadsheetId: process.env.GOOGLE_SHEET_ID,
-      range: 'Sheet1!A:M',
-    });
-    
-    const rows = sheetResponse.data.values || [];
-    const matchRowIndex = rows.findIndex(r => r[10] === tokenData.offer_id);
-    
-    if (matchRowIndex !== -1) {
-      const sheetRowIndex = matchRowIndex + 1;
-      const newStatus = candidateResponse === 'accepted' ? 'Accepted' : 'Declined';
-      await sheets.spreadsheets.values.update({
-        spreadsheetId: process.env.GOOGLE_SHEET_ID,
-        range: `Sheet1!J${sheetRowIndex}`,
-        valueInputOption: 'USER_ENTERED',
-        resource: { values: [[newStatus]] }
+    // 4. Update Offer Status in Supabase
+    await supabase.from('offers').update({ status: newStatus }).eq('id', offerData.id);
+
+    // 5. Handle Rejection specific logic
+    if (newStatus === 'Rejected') {
+      const rejectedAt = new Date().toISOString();
+      await supabase.from('rejections').insert([{
+        offer_id: offerData.id,
+        candidate_name: offerData.candidate_name,
+        candidate_email: offerData.candidate_email,
+        reason: req.body.reason || null,
+        rejected_at: rejectedAt
+      }]);
+
+      syncRejectionToSheet({
+        candidate_name: offerData.candidate_name,
+        candidate_email: offerData.candidate_email,
+        department: offerData.department,
+        manager_email: offerData.users?.email,
+        rejected_at: rejectedAt
       });
     }
 
-    // 4. Log Audit
+    // Update Sheets for Offer status change
+    syncOfferToSheet({
+      ...offerData,
+      status: newStatus,
+      manager_email: offerData.users?.email
+    });
+
+    // 6. Log Audit
     await logAudit(tokenData.offer_id, 'Candidate', `candidate_${candidateResponse}`);
 
-    // 5. WebSocket broadcast
+    // 7. WebSocket broadcast
     if (typeof global.broadcastResponse === 'function') {
       global.broadcastResponse({
         type: 'OFFER_RESPONSE',

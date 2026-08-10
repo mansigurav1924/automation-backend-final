@@ -19,6 +19,7 @@ export default function Candidates() {
   const [offers, setOffers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [deptFilter, setDeptFilter] = useState('All');
   const [sortMethod, setSortMethod] = useState('name_asc');
 
   useEffect(() => {
@@ -39,6 +40,7 @@ export default function Candidates() {
   });
   const candidates = Object.values(candidateMap)
     .filter(c => c.name.toLowerCase().includes(search.toLowerCase()) || c.email.toLowerCase().includes(search.toLowerCase()))
+    .filter(c => deptFilter === 'All' || c.offers.some(o => o.department === deptFilter))
     .sort((a, b) => {
       if (sortMethod === 'name_asc') return a.name.localeCompare(b.name);
       if (sortMethod === 'name_desc') return b.name.localeCompare(a.name);
@@ -63,6 +65,19 @@ export default function Candidates() {
             <option value="name_asc">Name (A-Z)</option>
             <option value="name_desc">Name (Z-A)</option>
             <option value="offers_desc">Most Offers</option>
+          </select>
+          <select
+            className="form-input"
+            style={{ width: 140, fontSize: '0.82rem', padding: '0.5rem 0.75rem', appearance: 'none', cursor: 'pointer' }}
+            value={deptFilter}
+            onChange={e => setDeptFilter(e.target.value)}
+          >
+            <option value="All">All Departments</option>
+            <option value="AI">AI</option>
+            <option value="Marketing">Marketing</option>
+            <option value="Sales">Sales</option>
+            <option value="Engineering">Engineering</option>
+            <option value="HR">HR</option>
           </select>
           <input
             type="text"

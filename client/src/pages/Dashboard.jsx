@@ -15,7 +15,7 @@ export default function Dashboard() {
   const [deptFilter, setDeptFilter]     = useState('');
   const [dateFrom, setDateFrom]         = useState('');
   const [dateTo, setDateTo]             = useState('');
-  const [hrFilter, setHrFilter]         = useState('');
+  const [managerFilter, setManagerFilter] = useState('');
   const [exporting, setExporting]       = useState(false);
 
   const user = getAuthUser();
@@ -52,9 +52,9 @@ export default function Dashboard() {
         (o.department || '').toLowerCase().includes(deptFilter.toLowerCase())
       );
     }
-    if (hrFilter) {
+    if (managerFilter) {
       result = result.filter(o =>
-        (o.generated_by || '').toLowerCase().includes(hrFilter.toLowerCase())
+        (o.generated_by || '').toLowerCase().includes(managerFilter.toLowerCase())
       );
     }
     if (dateFrom) {
@@ -86,17 +86,20 @@ export default function Dashboard() {
       if (aVal > bVal) return sortDesc ? -1 : 1;
       return 0;
     });
-  }, [offers, search, statusFilter, deptFilter, hrFilter, dateFrom, dateTo, sortCol, sortDesc]);
+  }, [offers, search, statusFilter, deptFilter, managerFilter, dateFrom, dateTo, sortCol, sortDesc]);
+
+  const rejectedOffers = useMemo(() => {
+    return offers.filter(o => o.status === 'Rejected');
+  }, [offers]);
 
   const stats = {
     total:   offers.length,
     sent:    offers.filter(o => o.status === 'Sent').length,
     pending: offers.filter(o => o.status === 'Draft' || o.status === 'Pending').length,
     expired: offers.filter(o => o.status === 'Expired').length,
-    failed:  offers.filter(o => o.status === 'Failed').length,
+    rejected: rejectedOffers.length,
   };
 
-  // Server-side export — respects active filters
   const exportCSV = async () => {
     setExporting(true);
     try {
@@ -144,20 +147,19 @@ export default function Dashboard() {
         <KpiCard icon={<Users size={20} />}       label="Total Offers" value={stats.total}   iconBg="#EDE9FF" iconColor="var(--color-primary)" />
         <KpiCard icon={<Send size={20} />}         label="Sent"         value={stats.sent}    iconBg="#D1FAE5" iconColor="#059669" />
         <KpiCard icon={<Timer size={20} />}        label="Expired"      value={stats.expired} iconBg="#FEE2E2" iconColor="#9B1C1C" />
-        <KpiCard icon={<AlertCircle size={20} />}  label="Failed"       value={stats.failed}  iconBg="#FEE2E2" iconColor="#DC2626" />
+        <KpiCard icon={<XCircle size={20} />}      label="Rejected"     value={stats.rejected} iconBg="#FEE2E2" iconColor="#DC2626" />
       </div>
 
       {/* Main table card */}
-      <div style={{ background: '#fff', borderRadius: 'var(--radius-card)', boxShadow: 'var(--shadow-card)', overflow: 'hidden' }}>
+      <div style={{ background: '#fff', borderRadius: 'var(--radius-card)', boxShadow: 'var(--shadow-card)', overflow: 'hidden', marginBottom: '2rem' }}>
 
         {/* Toolbar */}
         <div style={{ padding: '1.25rem 1.5rem', borderBottom: '1px solid #F1F1F8', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
           <div>
-            <h2 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--color-heading)', margin: 0 }}>All Candidates</h2>
+            <h2 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--color-heading)', margin: 0 }}>All Offers</h2>
             <p style={{ fontSize: '0.75rem', color: 'var(--color-body)', margin: '0.1rem 0 0' }}>{filtered.length} record{filtered.length !== 1 ? 's' : ''}</p>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
-            {/* Status Filter */}
             <div style={{ position: 'relative' }}>
               <Filter size={14} style={{ position: 'absolute', left: 11, top: '50%', transform: 'translateY(-50%)', color: 'var(--color-muted)' }} />
               <select
@@ -169,11 +171,11 @@ export default function Dashboard() {
                 <option value="All">All Statuses</option>
                 <option value="Sent">Sent</option>
                 <option value="Pending">Pending</option>
+                <option value="Accepted">Accepted</option>
+                <option value="Rejected">Rejected</option>
                 <option value="Expired">Expired</option>
-                <option value="Failed">Failed</option>
               </select>
             </div>
-            {/* Department Filter */}
             <input
               type="text"
               className="form-input"
@@ -182,23 +184,20 @@ export default function Dashboard() {
               value={deptFilter}
               onChange={e => setDeptFilter(e.target.value)}
             />
-            {/* Date Range */}
             <input type="date" className="form-input" style={{ fontSize: '0.82rem', padding: '0.5rem 0.6rem', width: 140 }} value={dateFrom} onChange={e => setDateFrom(e.target.value)} title="From date" />
             <input type="date" className="form-input" style={{ fontSize: '0.82rem', padding: '0.5rem 0.6rem', width: 140 }} value={dateTo}   onChange={e => setDateTo(e.target.value)}   title="To date" />
             
-            {/* HR Filter (Admin Only) */}
             {isAdmin && (
               <input
                 type="text"
                 className="form-input"
                 style={{ width: 140, fontSize: '0.82rem', padding: '0.5rem 0.75rem' }}
-                placeholder="HR Email…"
-                value={hrFilter}
-                onChange={e => setHrFilter(e.target.value)}
+                placeholder="Manager Email…"
+                value={managerFilter}
+                onChange={e => setManagerFilter(e.target.value)}
               />
             )}
             
-            {/* Search */}
             <div style={{ position: 'relative' }}>
               <Search size={14} style={{ position: 'absolute', left: 11, top: '50%', transform: 'translateY(-50%)', color: 'var(--color-muted)' }} />
               <input
@@ -294,6 +293,44 @@ export default function Dashboard() {
           </table>
         </div>
       </div>
+      
+      {/* Rejected Offers Section */}
+      {rejectedOffers.length > 0 && (
+        <div style={{ background: '#fff', borderRadius: 'var(--radius-card)', boxShadow: 'var(--shadow-card)', overflow: 'hidden' }}>
+          <div style={{ padding: '1.25rem 1.5rem', borderBottom: '1px solid #F1F1F8' }}>
+            <h2 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--color-heading)', margin: 0 }}>Rejected Offers</h2>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th style={{ width: 40 }}>#</th>
+                  <th>Candidate</th>
+                  <th>Email</th>
+                  <th>Department</th>
+                  <th>Rejected On</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rejectedOffers.map((offer, i) => {
+                  const rejectedDate = offer.rejections && offer.rejections.length > 0 
+                    ? new Date(offer.rejections[0].rejected_at).toLocaleString('en-IN')
+                    : 'Unknown';
+                  return (
+                    <tr key={`rej-${offer.id}`}>
+                      <td style={{ color: 'var(--color-muted)', fontSize: '0.8rem', width: 40 }}>{i + 1}</td>
+                      <td className="td-name">{offer.candidate_name}</td>
+                      <td>{offer.candidate_email}</td>
+                      <td>{offer.department}</td>
+                      <td>{rejectedDate}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </motion.div>
   );
 }
@@ -324,11 +361,13 @@ function KpiCard({ icon, label, value, iconBg, iconColor }) {
 
 function StatusBadge({ status }) {
   const map = {
-    Sent:    { bg: '#D1FAE5', color: '#065F46', icon: <CheckCircle2 size={12} />, label: 'Sent' },
-    Pending: { bg: '#FEF3C7', color: '#92400E', icon: <Clock size={12} />,        label: 'Pending' },
-    Draft:   { bg: '#FEF3C7', color: '#92400E', icon: <Clock size={12} />,        label: 'Pending Approval' },
-    Failed:  { bg: '#FEE2E2', color: '#991B1B', icon: <XCircle size={12} />,      label: 'Failed' },
-    Expired: { bg: '#F3F4F6', color: '#6B7280', icon: <Timer size={12} />,        label: 'Expired' },
+    Sent:     { bg: '#D1FAE5', color: '#065F46', icon: <CheckCircle2 size={12} />, label: 'Sent' },
+    Pending:  { bg: '#FEF3C7', color: '#92400E', icon: <Clock size={12} />,        label: 'Pending' },
+    Accepted: { bg: '#D1FAE5', color: '#065F46', icon: <CheckCircle2 size={12} />, label: 'Accepted' },
+    Rejected: { bg: '#FEE2E2', color: '#991B1B', icon: <XCircle size={12} />,      label: 'Rejected' },
+    Draft:    { bg: '#FEF3C7', color: '#92400E', icon: <Clock size={12} />,        label: 'Pending Approval' },
+    Failed:   { bg: '#FEE2E2', color: '#991B1B', icon: <XCircle size={12} />,      label: 'Failed' },
+    Expired:  { bg: '#F3F4F6', color: '#6B7280', icon: <Timer size={12} />,        label: 'Expired' },
   };
   const s = map[status] || map['Pending'];
   return (

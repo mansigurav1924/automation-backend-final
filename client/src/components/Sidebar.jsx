@@ -10,8 +10,8 @@ export default function Sidebar() {
   const [showLogoutModal, setShowLogoutModal] = useState(false);
 
   const user = getAuthUser();
-  const effectiveRole = user?.role === 'user' ? 'hr' : user?.role;
-  const dashboardPath = effectiveRole === 'admin' ? '/admin/dashboard' : '/hr/dashboard';
+  const effectiveRole = user?.role;
+  const dashboardPath = effectiveRole === 'admin' ? '/admin/dashboard' : '/manager/dashboard';
 
   const NAV_ITEMS = [
     { to: dashboardPath,   label: 'Dashboard',   icon: LayoutDashboard },

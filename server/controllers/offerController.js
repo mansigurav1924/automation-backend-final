@@ -1,14 +1,13 @@
 const generatePdf = require('../utils/pdfGenerator');
 const sendOfferEmail = require('../utils/emailSender');
-const sheets = require('../config/googleSheetsClient');
+const supabase = require('../config/supabaseClient');
 const { z } = require('zod');
 const { resolveEmailContent } = require('./templateController');
 const { logAudit } = require('../utils/auditLogger');
 const { createResponseToken } = require('./responseController');
-
 const { getPdfTemplateHtml } = require('./pdfTemplateController');
+const { syncOfferToSheet, syncRejectionToSheet } = require('../utils/sheetsSync');
 
-// ── Validation Schemas ───────────────────────────────────────────────
 const offerSchema = z.object({
   candidateName: z.string().min(1, "Name is required").trim(),
   candidateEmail: z.string().email("Invalid email format"),
@@ -19,72 +18,13 @@ const offerSchema = z.object({
   mode: z.string().optional(),
   compensation: z.string().optional(),
   offerIssueDate: z.string().optional(),
-  validUntil: z.string().optional(),  // Offer expiry date (Column L)
+  validUntil: z.string().optional(),
   pdfTemplateId: z.string().optional(),
 }).refine(data => {
   const start = new Date(data.startDate);
   const end = new Date(data.endDate);
   return start < end;
-}, {
-  message: "Start date must be before end date",
-  path: ["endDate"]
-});
-
-// ── Helper: generate a short unique ID ───────────────────────────────
-function makeId() {
-  return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-}
-
-// ── Helper: fetch all sheet rows (including header) ──────────────────
-async function getAllRows() {
-  const response = await sheets.spreadsheets.values.get({
-    spreadsheetId: process.env.GOOGLE_SHEET_ID,
-    range: 'Sheet1!A:P',   // Extended to include Column P
-  });
-  return response.data.values || [];
-}
-
-// ── Helper: map a data row-array → offer object ──────────────────────
-// Columns: A=candidateName B=candidateEmail C=designation D=department
-//          E=startDate     F=endDate        G=mode        H=compensation
-//          I=created_at    J=emailStatus    K=offerId     L=valid_until
-//          M=approval_status N=pdfTemplateId O=generatedBy P=hrDepartment
-function rowToOffer(row, sheetRowIndex) {
-  const validUntil = row[11] || null;  // Column L
-  const approvalStatus = row[12] || 'Pending Approval'; // Column M
-  const pdfTemplateId = row[13] || null; // Column N
-  const generatedBy = row[14] || null; // Column O
-  const hrDepartment = row[15] || null; // Column P
-  const status     = row[9]  || 'Draft';
-
-  // Auto-derive Expired status if past valid_until and not terminal
-  const terminalStatuses = ['Accepted', 'Declined', 'Expired'];
-  const effectiveStatus = (
-    validUntil &&
-    !terminalStatuses.includes(status) &&
-    new Date() > new Date(validUntil)
-  ) ? 'Expired' : status;
-
-  return {
-    id:              row[10] || String(sheetRowIndex),   // Column K (UUID)
-    sheet_row:       sheetRowIndex,
-    candidate_name:  row[0]  || '',
-    candidate_email: row[1]  || '',
-    designation:     row[2]  || '',
-    department:      row[3]  || '',
-    start_date:      row[4]  || '',
-    end_date:        row[5]  || '',
-    mode:            row[6]  || '',
-    compensation:    row[7]  || '',
-    created_at:      row[8]  || new Date().toISOString(),
-    status:          effectiveStatus,
-    valid_until:     validUntil,
-    approval_status: approvalStatus,
-    pdf_template_id: pdfTemplateId,
-    generated_by:    generatedBy,
-    hr_department:   hrDepartment,
-  };
-}
+}, { message: "Start date must be before end date", path: ["endDate"] });
 
 // ═══════════════════════════════════════════════════════════════════════
 // POST /api/offers/preview
@@ -92,27 +32,14 @@ function rowToOffer(row, sheetRowIndex) {
 const previewOffer = async (req, res) => {
   try {
     const parsed = offerSchema.safeParse(req.body);
-    if (!parsed.success) {
-      return res.status(400).json({ error: parsed.error.issues.map(i => i.message).join(', ') });
-    }
-
-    const {
-      candidateName, candidateEmail, designation, department,
-      startDate, endDate, mode, compensation, offerIssueDate, validUntil, pdfTemplateId
-    } = parsed.data;
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues.map(i => i.message).join(', ') });
+    
+    const { candidateName, candidateEmail, designation, department, startDate, endDate, mode, compensation, offerIssueDate, validUntil, pdfTemplateId } = parsed.data;
 
     let derivedCompensation = compensation ? String(compensation).trim() : 'Unpaid Internship';
     if (!isNaN(derivedCompensation) && derivedCompensation.trim() !== '') {
       derivedCompensation = `₹${Number(derivedCompensation).toLocaleString('en-IN')} per month`;
     }
-
-    const compLower = derivedCompensation.toLowerCase();
-    const compensationType = (!compensation || compensation === '0' || compLower.includes('unpaid')) ? 'unpaid' : 'paid';
-
-    // Format valid_until for PDF display
-    const validUntilDisplay = validUntil
-      ? new Date(validUntil).toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' })
-      : null;
 
     const candidateData = {
       candidateName, candidateEmail, designation,
@@ -120,24 +47,17 @@ const previewOffer = async (req, res) => {
       startDate, endDate,
       mode: mode || 'Remote',
       compensation: derivedCompensation,
-      compensationType,
       offerIssueDate: offerIssueDate || new Date().toLocaleDateString(),
-      validUntil: validUntilDisplay || 'Not specified',
+      validUntil: validUntil ? new Date(validUntil).toLocaleDateString('en-IN') : 'Not specified',
     };
 
-    console.log('Generating PDF for preview...');
     let customTemplateHtml = null;
     if (pdfTemplateId) customTemplateHtml = await getPdfTemplateHtml(pdfTemplateId);
     const pdfBuffer = await generatePdf(candidateData, { customTemplateHtml });
 
-    res.set({
-      'Content-Type': 'application/pdf',
-      'Content-Disposition': `inline; filename="preview.pdf"`,
-      'Content-Length': pdfBuffer.length
-    });
+    res.set({ 'Content-Type': 'application/pdf', 'Content-Disposition': `inline; filename="preview.pdf"`, 'Content-Length': pdfBuffer.length });
     res.send(pdfBuffer);
   } catch (error) {
-    console.error('Preview Offer Error:', error);
     res.status(500).json({ error: error.message || 'Failed to generate preview' });
   }
 };
@@ -148,114 +68,93 @@ const previewOffer = async (req, res) => {
 const generateOffer = async (req, res) => {
   try {
     const parsed = offerSchema.safeParse(req.body);
-    if (!parsed.success) {
-      return res.status(400).json({ error: parsed.error.issues.map(i => i.message).join(', ') });
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues.map(i => i.message).join(', ') });
+
+    const data = parsed.data;
+    let derivedCompensation = data.compensation ? String(data.compensation).trim() : 'Unpaid Internship';
+    if (!isNaN(derivedCompensation) && derivedCompensation.trim() !== '') derivedCompensation = `₹${Number(derivedCompensation).toLocaleString('en-IN')} per month`;
+
+    const userDept = req.user?.department;
+    const userRole = req.user?.role;
+    const targetDept = data.department || userDept || 'N/A';
+
+    if (userRole === 'manager' && userDept !== targetDept) {
+      return res.status(403).json({ error: 'Managers can only generate offers for their own department.' });
     }
 
-    const {
-      candidateName, candidateEmail, designation, department,
-      startDate, endDate, mode, compensation, offerIssueDate, validUntil, pdfTemplateId
-    } = parsed.data;
-
-    // Sanitize compensation
-    let derivedCompensation = compensation ? String(compensation).trim() : 'Unpaid Internship';
-    if (!isNaN(derivedCompensation) && derivedCompensation.trim() !== '') {
-      derivedCompensation = `₹${Number(derivedCompensation).toLocaleString('en-IN')} per month`;
-    }
-
-    const compLower = derivedCompensation.toLowerCase();
-    const compensationType = (!compensation || compensation === '0' || compLower.includes('unpaid')) ? 'unpaid' : 'paid';
-    const offerId = makeId();
-
-    const validUntilDisplay = validUntil
-      ? new Date(validUntil).toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' })
-      : null;
-
-    const candidateData = {
-      candidateName, candidateEmail, designation,
-      department: department || 'N/A',
-      startDate, endDate,
-      mode: mode || 'Remote',
+    // 1. Generate DB record as 'Pending Approval' first to get the ID
+    const { data: offerRecord, error: insertError } = await supabase.from('offers').insert([{
+      candidate_name: data.candidateName,
+      candidate_email: data.candidateEmail,
+      designation: data.designation,
+      department: targetDept,
+      start_date: data.startDate,
+      end_date: data.endDate,
+      mode: data.mode || 'Remote',
       compensation: derivedCompensation,
-      compensationType,
-      offerIssueDate: offerIssueDate || new Date().toLocaleDateString(),
-      validUntil: validUntilDisplay || 'Not specified',
+      offer_issue_date: data.offerIssueDate || new Date().toISOString(),
+      valid_until: data.validUntil || null,
+      pdf_template_id: data.pdfTemplateId || null,
+      status: 'Pending Approval',
+      approval_status: 'Approved',
+      generated_by: req.user.userId
+    }]).select().single();
+
+    if (insertError) throw insertError;
+
+    // 2. Generate PDF and email content
+    const validUntilDisplay = offerRecord.valid_until ? new Date(offerRecord.valid_until).toLocaleDateString('en-IN') : 'Not specified';
+    const candidateData = {
+      candidateName: offerRecord.candidate_name, candidateEmail: offerRecord.candidate_email,
+      designation: offerRecord.designation, department: offerRecord.department,
+      startDate: offerRecord.start_date, endDate: offerRecord.end_date,
+      mode: offerRecord.mode, compensation: offerRecord.compensation,
+      validUntil: validUntilDisplay,
     };
 
-    const actorRole = req.user?.role || 'user';
-    // Changed to always auto-approve so emails send immediately for testing/usage
-    const isAutoApproved = true; 
-    const approvalStatus = isAutoApproved ? 'Approved' : 'Pending Approval';
-    let emailStatus = 'Draft';
-    let pdfBuffer = null;
+    let customTemplateHtml = null;
+    if (offerRecord.pdf_template_id) customTemplateHtml = await getPdfTemplateHtml(offerRecord.pdf_template_id);
+    const pdfBuffer = await generatePdf(candidateData, { customTemplateHtml });
 
-    // Only send email immediately if auto-approved
-    if (isAutoApproved) {
-      console.log('Generating PDF and sending email (Auto-approved)...');
-      try {
-        let customTemplateHtml = null;
-        if (pdfTemplateId) customTemplateHtml = await getPdfTemplateHtml(pdfTemplateId);
-        pdfBuffer = await generatePdf(candidateData, { customTemplateHtml });
-        const templateVars = {
-          candidate_name: candidateName,
-          role:           designation,
-          joining_date:   candidateData.startDate,
-          end_date:       candidateData.endDate,
-          mode:           candidateData.mode,
-          valid_until:    validUntilDisplay || 'Not set',
-        };
-        let emailContent = await resolveEmailContent(offerId, templateVars).catch(() => null);
-        
-        // Generate token and append to email
-        const token = await createResponseToken(offerId, candidateData.validUntil);
-        if (token && emailContent) {
-          const responseLink = `${process.env.CLIENT_URL || 'http://localhost:5173'}/respond/${token}`;
-          emailContent.htmlBody += `<br><hr><br>
-            <p><strong>Please let us know your decision:</strong></p>
-            <a href="${responseLink}" style="display: inline-block; padding: 10px 20px; background-color: #4F46E5; color: white; text-decoration: none; border-radius: 6px; font-weight: bold;">Respond to Offer</a>
-            <p><small>Or copy and paste this link: <a href="${responseLink}">${responseLink}</a></small></p>`;
-        }
-        
-        await sendOfferEmail(candidateEmail, candidateName, pdfBuffer, emailContent || {});
-        emailStatus = 'Sent';
-      } catch (emailError) {
-        console.error('Email failed to send:', emailError);
-        emailStatus = 'Failed';
-      }
-    } else {
-      console.log('Offer generated as Draft/Pending Approval, skipping email send.');
+    const templateVars = {
+      candidate_name: offerRecord.candidate_name, role: offerRecord.designation,
+      joining_date: offerRecord.start_date, end_date: offerRecord.end_date,
+      mode: offerRecord.mode, valid_until: validUntilDisplay,
+    };
+
+    let emailContent = await resolveEmailContent(offerRecord.id, templateVars).catch(() => null);
+    const token = await createResponseToken(offerRecord.id, offerRecord.valid_until);
+    if (token && emailContent) {
+      const responseLink = `${process.env.CLIENT_URL || 'http://localhost:5173'}/respond/${token}`;
+      emailContent.html = (emailContent.html || '') + `<br><hr><br><p><strong>Please let us know your decision:</strong></p><a href="${responseLink}" style="display: inline-block; padding: 10px 20px; background-color: #4F46E5; color: white; text-decoration: none; border-radius: 6px; font-weight: bold;">Respond to Offer</a>`;
     }
 
-    // 3. Save to Google Sheets (A:L — 12 columns including valid_until)
-    if (sheets && process.env.GOOGLE_SHEET_ID) {
-      try {
-        await sheets.spreadsheets.values.append({
-          spreadsheetId: process.env.GOOGLE_SHEET_ID,
-          range: 'Sheet1!A:A',
-          valueInputOption: 'USER_ENTERED',
-          resource: {
-            values: [[
-              candidateName, candidateEmail, designation, department || 'N/A',
-              startDate, endDate, mode || 'Remote', derivedCompensation,
-              new Date().toISOString(), emailStatus, offerId,
-              validUntil || '', approvalStatus, pdfTemplateId || '',
-              req.user?.email || 'unknown', req.user?.department || ''
-            ]]
-          }
-        });
-      } catch (sheetsError) {
-        console.error('Google Sheets append error:', sheetsError);
-      }
+    let emailStatus = 'Pending';
+    try {
+      await sendOfferEmail(offerRecord.candidate_email, offerRecord.candidate_name, pdfBuffer, emailContent || {});
+      emailStatus = 'Sent';
+    } catch (e) {
+      console.error('Failed to send initial email:', e);
+      emailStatus = 'Failed';
     }
 
-    // 4. Log Audit
+    // 3. Update DB to Sent
+    await supabase.from('offers').update({ status: emailStatus }).eq('id', offerRecord.id);
+
+    // 4. Async Sheets Sync
+    syncOfferToSheet({
+      ...offerRecord,
+      manager_email: req.user.email,
+      status: emailStatus,
+    });
+
     const actorEmail = req.user?.email || 'unknown';
-    await logAudit(offerId, actorEmail, 'generated', { after: candidateData });
+    await logAudit(offerRecord.id, actorEmail, 'generated_and_sent', { after: offerRecord });
 
-    res.status(200).json({ message: 'Offer generated and processed successfully', status: emailStatus, offerId });
+    res.status(200).json({ message: 'Offer generated and sent successfully', offerId: offerRecord.id, status: emailStatus });
   } catch (error) {
-    console.error('Error in generateOffer:', error);
-    res.status(500).json({ error: 'Internal Server Error', details: error.message });
+    console.error('generateOffer Error:', error);
+    res.status(500).json({ error: error.message || 'Internal Server Error' });
   }
 };
 
@@ -264,24 +163,22 @@ const generateOffer = async (req, res) => {
 // ═══════════════════════════════════════════════════════════════════════
 const getOffers = async (req, res) => {
   try {
-    if (sheets && process.env.GOOGLE_SHEET_ID) {
-      const rows = await getAllRows();
-      if (rows.length > 1) {
-        // rows[0] is the header; data rows start at index 1 → sheet row 2
-        let data = rows.slice(1)
-          .map((row, i) => rowToOffer(row, i + 2))
-          .filter(o => o.candidate_name !== '');
+    let query = supabase.from('offers').select(`
+      *,
+      users!generated_by(email, name),
+      rejections(*)
+    `);
 
-        if (req.user?.role === 'hr') {
-          data = data.filter(o => o.generated_by === req.user.email);
-        }
-
-        return res.status(200).json(data.reverse());
-      }
+    if (req.user?.role === 'manager') {
+      query = query.eq('department', req.user.department);
     }
-    res.status(200).json([]);
+
+    const { data, error } = await query.order('created_at', { ascending: false });
+    if (error) throw error;
+
+    res.status(200).json(data);
   } catch (error) {
-    console.error('Error fetching from Google Sheets:', error);
+    console.error(error);
     res.status(500).json({ error: 'Failed to fetch offers' });
   }
 };
@@ -291,240 +188,16 @@ const getOffers = async (req, res) => {
 // ═══════════════════════════════════════════════════════════════════════
 const getOfferById = async (req, res) => {
   try {
-    const { id } = req.params;
-    if (!sheets || !process.env.GOOGLE_SHEET_ID) {
-      return res.status(503).json({ error: 'Google Sheets not configured' });
-    }
-
-    const rows = await getAllRows();
-    if (rows.length <= 1) return res.status(404).json({ error: 'No offers found' });
-
-    // Search by column K (offerId) or sheet_row index fallback
-    const dataRows = rows.slice(1);
-    let matchRow = null;
-    let matchSheetRow = null;
-
-    for (let i = 0; i < dataRows.length; i++) {
-      const row = dataRows[i];
-      const sheetRow = i + 2;
-      const rowId = row[10];        // Column K = offerId
-
-      if (rowId === id) {
-        matchRow = row;
-        matchSheetRow = sheetRow;
-        break;
-      }
-    }
-
-    if (!matchRow) return res.status(404).json({ error: 'Offer not found' });
-    res.status(200).json(rowToOffer(matchRow, matchSheetRow));
-  } catch (error) {
-    console.error('Error in getOfferById:', error);
-    res.status(500).json({ error: 'Internal Server Error', details: error.message });
-  }
-};
-
-// ═══════════════════════════════════════════════════════════════════════
-// POST /api/offers/:id/resend
-// ═══════════════════════════════════════════════════════════════════════
-const resendOffer = async (req, res) => {
-  try {
-    const { id } = req.params;
-    if (!sheets || !process.env.GOOGLE_SHEET_ID) {
-      return res.status(503).json({ error: 'Google Sheets not configured' });
-    }
-
-    const rows = await getAllRows();
-    if (rows.length <= 1) return res.status(404).json({ error: 'No offers found' });
-
-    const dataRows = rows.slice(1);
-    let matchRow = null;
-    let matchSheetRow = null;
-
-    for (let i = 0; i < dataRows.length; i++) {
-      const row = dataRows[i];
-      const sheetRow = i + 2;
-      if ((row[10] || '') === id) {
-        matchRow = row;
-        matchSheetRow = sheetRow;
-        break;
-      }
-    }
-
-    if (!matchRow) return res.status(404).json({ error: 'Offer not found' });
-
-    const offer = rowToOffer(matchRow, matchSheetRow);
-    const compLower = (offer.compensation || '').toLowerCase();
-    const compensationType = (!offer.compensation || offer.compensation === '0' || compLower.includes('unpaid')) ? 'unpaid' : 'paid';
-
-    const candidateData = {
-      candidateName:   offer.candidate_name,
-      candidateEmail:  offer.candidate_email,
-      designation:     offer.designation,
-      department:      offer.department,
-      startDate:       offer.start_date,
-      endDate:         offer.end_date,
-      mode:            offer.mode,
-      compensation:    offer.compensation,
-      compensationType,
-      offerIssueDate:  new Date().toLocaleDateString(),
-    };
-
-    // Re-generate PDF
-    const pdfBuffer = await generatePdf(candidateData);
-
-    // Resend email (with optional template)
-    let newStatus = 'Failed';
-    try {
-      const templateVars = {
-        candidate_name: offer.candidate_name,
-        role:           offer.designation,
-        joining_date:   offer.start_date,
-        end_date:       offer.end_date,
-        mode:           offer.mode,
-        valid_until:    offer.valid_until
-          ? new Date(offer.valid_until).toLocaleDateString('en-IN') : 'Not set',
-      };
-      const emailContent = await resolveEmailContent(offer.id, templateVars).catch(() => null);
-      await sendOfferEmail(offer.candidate_email, offer.candidate_name, pdfBuffer, emailContent || {});
-      newStatus = 'Sent';
-    } catch (emailError) {
-      console.error('Resend email failed:', emailError);
-    }
-
-    // Update status in column J of the matched sheet row
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: process.env.GOOGLE_SHEET_ID,
-      range: `Sheet1!J${matchSheetRow}`,
-      valueInputOption: 'USER_ENTERED',
-      resource: { values: [[newStatus]] }
-    });
-    // Log Audit
-    const actorEmail = req.user?.email || 'unknown';
-    await logAudit(offer.id, actorEmail, 'resent');
-
-    res.status(200).json({ message: `Offer resent. Status: ${newStatus}`, status: newStatus });
-  } catch (error) {
-    console.error('Error in resendOffer:', error);
-    res.status(500).json({ error: 'Internal Server Error', details: error.message });
-  }
-};
-
-// ═══════════════════════════════════════════════════════════════════════
-// PUT /api/offers/:id
-// ═══════════════════════════════════════════════════════════════════════
-const updateOffer = async (req, res) => {
-  try {
-    const { id } = req.params;
+    const { data, error } = await supabase.from('offers').select('*').eq('id', req.params.id).single();
+    if (error || !data) return res.status(404).json({ error: 'Offer not found' });
     
-    const parsed = offerSchema.safeParse(req.body);
-    if (!parsed.success) {
-      return res.status(400).json({ error: parsed.error.issues.map(i => i.message).join(', ') });
+    if (req.user?.role === 'manager' && data.department !== req.user.department) {
+      return res.status(403).json({ error: 'Access denied' });
     }
 
-    const {
-      candidateName, candidateEmail, designation, department,
-      startDate, endDate, mode, compensation, offerIssueDate, validUntil
-    } = parsed.data;
-    
-    if (!sheets || !process.env.GOOGLE_SHEET_ID) {
-      return res.status(503).json({ error: 'Google Sheets not configured' });
-    }
-
-    const rows = await getAllRows();
-    if (rows.length <= 1) return res.status(404).json({ error: 'No offers found' });
-
-    const dataRows = rows.slice(1);
-    let matchRow = null;
-    let matchSheetRow = null;
-
-    for (let i = 0; i < dataRows.length; i++) {
-      const row = dataRows[i];
-      const sheetRow = i + 2;
-      if ((row[10] || '') === id) {
-        matchRow = row;
-        matchSheetRow = sheetRow;
-        break;
-      }
-    }
-
-    if (!matchRow) return res.status(404).json({ error: 'Offer not found' });
-
-    const derivedCompensation = compensation || 'Unpaid Internship';
-    const compLower = derivedCompensation.toLowerCase();
-    const compensationType = (!compensation || compensation === '0' || compLower.includes('unpaid')) ? 'unpaid' : 'paid';
-
-    const validUntilDisplay = validUntil
-      ? new Date(validUntil).toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' })
-      : null;
-
-    const candidateData = {
-      candidateName, candidateEmail, designation,
-      department: department || 'N/A',
-      startDate, endDate,
-      mode: mode || 'Remote',
-      compensation: derivedCompensation,
-      compensationType,
-      offerIssueDate: new Date().toLocaleDateString(),
-      validUntil: validUntilDisplay || 'Not specified',
-    };
-
-    // Re-generate PDF
-    const pdfBuffer = await generatePdf(candidateData);
-
-    // Resend email
-    let newStatus = 'Failed';
-    try {
-      await sendOfferEmail(candidateEmail, candidateName, pdfBuffer);
-      newStatus = 'Sent';
-    } catch (emailError) {
-      console.error('Resend email failed:', emailError);
-    }
-
-    // Update cells A to H, J (status), and L (valid_until)
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: process.env.GOOGLE_SHEET_ID,
-      range: `Sheet1!A${matchSheetRow}:H${matchSheetRow}`,
-      valueInputOption: 'USER_ENTERED',
-      resource: { values: [[
-        candidateName, candidateEmail, designation, department || 'N/A',
-        startDate, endDate, mode || 'Remote', derivedCompensation
-      ]] }
-    });
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: process.env.GOOGLE_SHEET_ID,
-      range: `Sheet1!J${matchSheetRow}`,
-      valueInputOption: 'USER_ENTERED',
-      resource: { values: [[newStatus]] }
-    });
-    if (validUntil !== undefined) {
-      await sheets.spreadsheets.values.update({
-        spreadsheetId: process.env.GOOGLE_SHEET_ID,
-        range: `Sheet1!L${matchSheetRow}`,
-        valueInputOption: 'USER_ENTERED',
-        resource: { values: [[validUntil || '']] }
-      });
-    }
-    if (pdfTemplateId !== undefined) {
-      await sheets.spreadsheets.values.update({
-        spreadsheetId: process.env.GOOGLE_SHEET_ID,
-        range: `Sheet1!N${matchSheetRow}`,
-        valueInputOption: 'USER_ENTERED',
-        resource: { values: [[pdfTemplateId || '']] }
-      });
-    }
-
-    // Log Audit
-    const actorEmail = req.user?.email || 'unknown';
-    await logAudit(matchOfferId, actorEmail, 'updated', {
-      before: offer,
-      after: candidateData
-    });
-
-    res.status(200).json({ message: `Offer updated and resent. Status: ${newStatus}`, status: newStatus });
+    res.status(200).json(data);
   } catch (error) {
-    console.error('Error in updateOffer:', error);
-    res.status(500).json({ error: 'Internal Server Error', details: error.message });
+    res.status(500).json({ error: 'Failed to fetch offer' });
   }
 };
 
@@ -533,169 +206,192 @@ const updateOffer = async (req, res) => {
 // ═══════════════════════════════════════════════════════════════════════
 const approveOffer = async (req, res) => {
   try {
-    const { id } = req.params;
-    if (!sheets || !process.env.GOOGLE_SHEET_ID) return res.status(503).json({ error: 'Google Sheets not configured' });
+    const { data: offer, error } = await supabase.from('offers').select('*').eq('id', req.params.id).single();
+    if (error || !offer) return res.status(404).json({ error: 'Offer not found' });
 
-    const rows = await getAllRows();
-    const matchRowIndex = rows.findIndex(r => r[10] === id);
-    if (matchRowIndex === -1) return res.status(404).json({ error: 'Offer not found' });
-    const sheetRowIndex = matchRowIndex + 1;
-    const offer = rowToOffer(rows[matchRowIndex], sheetRowIndex);
-
-    if (offer.approval_status === 'Approved') {
-      return res.status(400).json({ error: 'Offer is already approved' });
+    if (req.user?.role === 'manager' && offer.department !== req.user.department) {
+      return res.status(403).json({ error: 'Access denied' });
     }
 
+    const validUntilDisplay = offer.valid_until ? new Date(offer.valid_until).toLocaleDateString('en-IN') : 'Not specified';
     const candidateData = {
       candidateName: offer.candidate_name, candidateEmail: offer.candidate_email,
       designation: offer.designation, department: offer.department,
       startDate: offer.start_date, endDate: offer.end_date,
       mode: offer.mode, compensation: offer.compensation,
-      validUntil: offer.valid_until ? new Date(offer.valid_until).toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' }) : 'Not specified',
+      validUntil: validUntilDisplay,
     };
 
-    console.log(`Approving offer ${id}. Generating PDF and sending email...`);
+    let customTemplateHtml = null;
+    if (offer.pdf_template_id) customTemplateHtml = await getPdfTemplateHtml(offer.pdf_template_id);
+    const pdfBuffer = await generatePdf(candidateData, { customTemplateHtml });
+
+    const templateVars = {
+      candidate_name: offer.candidate_name, role: offer.designation,
+      joining_date: offer.start_date, end_date: offer.end_date,
+      mode: offer.mode, valid_until: validUntilDisplay,
+    };
+
+    let emailContent = await resolveEmailContent(offer.id, templateVars).catch(() => null);
+    const token = await createResponseToken(offer.id, offer.valid_until);
+    if (token && emailContent) {
+      const responseLink = `${process.env.CLIENT_URL || 'http://localhost:5173'}/respond/${token}`;
+      emailContent.html = (emailContent.html || '') + `<br><hr><br><p><strong>Please let us know your decision:</strong></p><a href="${responseLink}" style="display: inline-block; padding: 10px 20px; background-color: #4F46E5; color: white; text-decoration: none; border-radius: 6px; font-weight: bold;">Respond to Offer</a>`;
+    }
+
     let emailStatus = 'Pending';
     try {
-      let customTemplateHtml = null;
-      if (offer.pdf_template_id) customTemplateHtml = await getPdfTemplateHtml(offer.pdf_template_id);
-      const pdfBuffer = await generatePdf(candidateData, { customTemplateHtml });
-      const templateVars = {
-        candidate_name: candidateData.candidateName,
-        role:           candidateData.designation,
-        joining_date:   candidateData.startDate,
-        end_date:       candidateData.endDate,
-        mode:           candidateData.mode,
-        valid_until:    candidateData.validUntil,
-      };
-      let emailContent = await resolveEmailContent(offer.id, templateVars).catch(() => null);
-
-      // Generate token and append to email
-      const token = await createResponseToken(offer.id, candidateData.validUntil);
-      if (token && emailContent) {
-        const responseLink = `${process.env.CLIENT_URL || 'http://localhost:5173'}/respond/${token}`;
-        emailContent.htmlBody += `<br><hr><br>
-          <p><strong>Please let us know your decision:</strong></p>
-          <a href="${responseLink}" style="display: inline-block; padding: 10px 20px; background-color: #4F46E5; color: white; text-decoration: none; border-radius: 6px; font-weight: bold;">Respond to Offer</a>
-          <p><small>Or copy and paste this link: <a href="${responseLink}">${responseLink}</a></small></p>`;
-      }
-
-      await sendOfferEmail(candidateData.candidateEmail, candidateData.candidateName, pdfBuffer, emailContent || {});
+      await sendOfferEmail(offer.candidate_email, offer.candidate_name, pdfBuffer, emailContent || {});
       emailStatus = 'Sent';
-    } catch (emailError) {
-      console.error('Email failed to send during approval:', emailError);
+    } catch (e) {
       emailStatus = 'Failed';
     }
 
-    // Update Status (Col J) and Approval Status (Col M)
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: process.env.GOOGLE_SHEET_ID,
-      range: `Sheet1!J${sheetRowIndex}:M${sheetRowIndex}`,
-      valueInputOption: 'USER_ENTERED',
-      resource: { values: [[emailStatus, offer.id, offer.valid_until || '', 'Approved']] }
-    });
+    await supabase.from('offers').update({ status: emailStatus, approval_status: 'Approved' }).eq('id', offer.id);
+    
+    syncOfferToSheet({ ...offer, status: emailStatus, manager_email: req.user.email });
+    await logAudit(offer.id, req.user.email, 'approved', { resultStatus: emailStatus });
 
-    const actorEmail = req.user?.email || 'unknown';
-    await logAudit(offer.id, actorEmail, 'approved', { resultStatus: emailStatus });
-
-    res.status(200).json({ message: 'Offer approved and sent', status: emailStatus, approval_status: 'Approved' });
+    res.status(200).json({ message: 'Offer approved and sent', status: emailStatus });
   } catch (error) {
-    console.error('Error in approveOffer:', error);
-    res.status(500).json({ error: 'Internal Server Error', details: error.message });
+    console.error('approveOffer Error:', error);
+    res.status(500).json({ error: error.message || 'Internal Server Error' });
   }
 };
 
 // ═══════════════════════════════════════════════════════════════════════
-// POST /api/offers/:id/reject
+// POST /api/offers/:id/reject (Internal reject logic for an offer draft)
 // ═══════════════════════════════════════════════════════════════════════
 const rejectOffer = async (req, res) => {
   try {
-    const { id } = req.params;
-    if (!sheets || !process.env.GOOGLE_SHEET_ID) return res.status(503).json({ error: 'Google Sheets not configured' });
+    const { data: offer, error } = await supabase.from('offers').select('*').eq('id', req.params.id).single();
+    if (error || !offer) return res.status(404).json({ error: 'Offer not found' });
 
-    const rows = await getAllRows();
-    const matchRowIndex = rows.findIndex(r => r[10] === id);
-    if (matchRowIndex === -1) return res.status(404).json({ error: 'Offer not found' });
-    const sheetRowIndex = matchRowIndex + 1;
-    const offer = rowToOffer(rows[matchRowIndex], sheetRowIndex);
+    if (req.user?.role === 'manager' && offer.department !== req.user.department) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
 
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: process.env.GOOGLE_SHEET_ID,
-      range: `Sheet1!M${sheetRowIndex}`,
-      valueInputOption: 'USER_ENTERED',
-      resource: { values: [['Rejected']] }
-    });
+    await supabase.from('offers').update({ status: 'Rejected', approval_status: 'Rejected' }).eq('id', offer.id);
+    syncOfferToSheet({ ...offer, status: 'Rejected', manager_email: req.user.email });
 
-    const actorEmail = req.user?.email || 'unknown';
-    await logAudit(offer.id, actorEmail, 'rejected');
+    await logAudit(offer.id, req.user.email, 'rejected_draft');
 
-    res.status(200).json({ message: 'Offer rejected', approval_status: 'Rejected' });
+    res.status(200).json({ message: 'Offer draft rejected', approval_status: 'Rejected' });
   } catch (error) {
-    console.error('Error in rejectOffer:', error);
     res.status(500).json({ error: 'Failed to reject offer' });
   }
 };
 
-// ═══════════════════════════════════════════════════════════════════════
-// GET /api/offers/:id/pdf
-// ═══════════════════════════════════════════════════════════════════════
-const downloadOfferPdf = async (req, res) => {
+const resendOffer = async (req, res) => {
   try {
-    const { id } = req.params;
-    if (!sheets || !process.env.GOOGLE_SHEET_ID) {
-      return res.status(503).json({ error: 'Google Sheets not configured' });
-    }
+    const { data: offer, error } = await supabase.from('offers').select('*').eq('id', req.params.id).single();
+    if (error || !offer) return res.status(404).json({ error: 'Offer not found' });
+    if (req.user?.role === 'manager' && offer.department !== req.user.department) return res.status(403).json({ error: 'Access denied' });
 
-    const rows = await getAllRows();
-    const dataRows = rows.slice(1);
-    let matchRow = null;
-    for (let i = 0; i < dataRows.length; i++) {
-      if (dataRows[i][10] === id) {
-        matchRow = dataRows[i];
-        break;
-      }
-    }
-
-    if (!matchRow) return res.status(404).json({ error: 'Offer not found' });
-
-    const pdfTemplateId = matchRow[13] || null;
-    let customTemplateHtml = null;
-    if (pdfTemplateId) customTemplateHtml = await getPdfTemplateHtml(pdfTemplateId);
-
-    const derivedCompensation = matchRow[7] || 'Unpaid Internship';
-    const compLower = derivedCompensation.toLowerCase();
-    const compensationType = (!matchRow[7] || matchRow[7] === '0' || compLower.includes('unpaid')) ? 'unpaid' : 'paid';
-    
-    const validUntilDisplay = matchRow[11]
-      ? new Date(matchRow[11]).toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' })
-      : 'Not specified';
-
+    const validUntilDisplay = offer.valid_until ? new Date(offer.valid_until).toLocaleDateString('en-IN') : 'Not specified';
     const candidateData = {
-      candidateName: matchRow[0] || '',
-      candidateEmail: matchRow[1] || '',
-      designation: matchRow[2] || '',
-      department: matchRow[3] || 'N/A',
-      startDate: matchRow[4] || '',
-      endDate: matchRow[5] || '',
-      mode: matchRow[6] || 'Remote',
-      compensation: derivedCompensation,
-      compensationType,
-      offerIssueDate: matchRow[8] ? new Date(matchRow[8]).toLocaleDateString() : new Date().toLocaleDateString(),
+      candidateName: offer.candidate_name, candidateEmail: offer.candidate_email,
+      designation: offer.designation, department: offer.department,
+      startDate: offer.start_date, endDate: offer.end_date,
+      mode: offer.mode, compensation: offer.compensation,
       validUntil: validUntilDisplay,
     };
 
+    let customTemplateHtml = null;
+    if (offer.pdf_template_id) customTemplateHtml = await getPdfTemplateHtml(offer.pdf_template_id);
     const pdfBuffer = await generatePdf(candidateData, { customTemplateHtml });
 
-    res.set({
-      'Content-Type': 'application/pdf',
-      'Content-Disposition': `inline; filename="Offer_${id}.pdf"`,
-      'Content-Length': pdfBuffer.length
-    });
+    const templateVars = {
+      candidate_name: offer.candidate_name, role: offer.designation,
+      joining_date: offer.start_date, end_date: offer.end_date,
+      mode: offer.mode, valid_until: validUntilDisplay,
+    };
+
+    let emailContent = await resolveEmailContent(offer.id, templateVars).catch(() => null);
+    const token = await createResponseToken(offer.id, offer.valid_until);
+    if (token && emailContent) {
+      const responseLink = `${process.env.CLIENT_URL || 'http://localhost:5173'}/respond/${token}`;
+      emailContent.html = (emailContent.html || '') + `<br><hr><br><p><strong>Please let us know your decision:</strong></p><a href="${responseLink}" style="display: inline-block; padding: 10px 20px; background-color: #4F46E5; color: white; text-decoration: none; border-radius: 6px; font-weight: bold;">Respond to Offer</a>`;
+    }
+
+    let emailStatus = 'Failed';
+    try {
+      await sendOfferEmail(offer.candidate_email, offer.candidate_name, pdfBuffer, emailContent || {});
+      emailStatus = 'Sent';
+    } catch (e) {
+      console.error(e);
+    }
+
+    await supabase.from('offers').update({ status: emailStatus }).eq('id', offer.id);
+    syncOfferToSheet({ ...offer, status: emailStatus, manager_email: req.user.email });
+    await logAudit(offer.id, req.user.email, 'resent');
+
+    res.status(200).json({ message: 'Offer resent', status: emailStatus });
+  } catch (error) {
+    console.error('resendOffer Error:', error);
+    res.status(500).json({ error: error.message || 'Internal Server Error' });
+  }
+};
+
+const updateOffer = async (req, res) => {
+  try {
+    const parsed = offerSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.issues.map(i => i.message).join(', ') });
+
+    const { data: offer, error } = await supabase.from('offers').select('*').eq('id', req.params.id).single();
+    if (error || !offer) return res.status(404).json({ error: 'Offer not found' });
+    if (req.user?.role === 'manager' && offer.department !== req.user.department) return res.status(403).json({ error: 'Access denied' });
+
+    const data = parsed.data;
+    let derivedCompensation = data.compensation ? String(data.compensation).trim() : 'Unpaid Internship';
+    if (!isNaN(derivedCompensation) && derivedCompensation.trim() !== '') derivedCompensation = `₹${Number(derivedCompensation).toLocaleString('en-IN')} per month`;
+
+    const { data: updatedOffer, error: updateError } = await supabase.from('offers').update({
+      candidate_name: data.candidateName,
+      candidate_email: data.candidateEmail,
+      designation: data.designation,
+      start_date: data.startDate,
+      end_date: data.endDate,
+      mode: data.mode || 'Remote',
+      compensation: derivedCompensation,
+      valid_until: data.validUntil || null,
+      pdf_template_id: data.pdfTemplateId || null,
+    }).eq('id', offer.id).select().single();
+
+    if (updateError) throw updateError;
+    
+    syncOfferToSheet({ ...updatedOffer, manager_email: req.user.email });
+    await logAudit(offer.id, req.user.email, 'updated', { before: offer, after: updatedOffer });
+
+    res.status(200).json({ message: 'Offer updated successfully' });
+  } catch (error) {
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+};
+
+const downloadOfferPdf = async (req, res) => {
+  try {
+    const { data: offer, error } = await supabase.from('offers').select('*').eq('id', req.params.id).single();
+    if (error || !offer) return res.status(404).json({ error: 'Offer not found' });
+    if (req.user?.role === 'manager' && offer.department !== req.user.department) return res.status(403).json({ error: 'Access denied' });
+
+    const candidateData = {
+      candidateName: offer.candidate_name, candidateEmail: offer.candidate_email,
+      designation: offer.designation, department: offer.department,
+      startDate: offer.start_date, endDate: offer.end_date, mode: offer.mode,
+      compensation: offer.compensation, offerIssueDate: new Date(offer.offer_issue_date).toLocaleDateString(),
+      validUntil: offer.valid_until ? new Date(offer.valid_until).toLocaleDateString('en-IN') : 'Not specified',
+    };
+
+    let customTemplateHtml = null;
+    if (offer.pdf_template_id) customTemplateHtml = await getPdfTemplateHtml(offer.pdf_template_id);
+    const pdfBuffer = await generatePdf(candidateData, { customTemplateHtml });
+
+    res.set({ 'Content-Type': 'application/pdf', 'Content-Disposition': `inline; filename="Offer_${req.params.id}.pdf"`, 'Content-Length': pdfBuffer.length });
     res.send(pdfBuffer);
   } catch (error) {
-    console.error('Error generating PDF for download:', error);
     res.status(500).json({ error: 'Failed to generate PDF' });
   }
 };
 
-module.exports = { generateOffer, previewOffer, getOffers, getOfferById, resendOffer, updateOffer, approveOffer, rejectOffer, downloadOfferPdf, rowToOffer };
+module.exports = { generateOffer, previewOffer, getOffers, getOfferById, resendOffer, updateOffer, approveOffer, rejectOffer, downloadOfferPdf };

@@ -7,7 +7,7 @@ export default function ProtectedRoute({ children, allowedRoles }) {
   }
   
   const user = getAuthUser();
-  const effectiveRole = user?.role === 'user' ? 'hr' : user?.role;
+  const effectiveRole = user?.role;
   if (allowedRoles && !allowedRoles.includes(effectiveRole)) {
     return <Navigate to="/" replace />; // redirect to home if not authorized
   }

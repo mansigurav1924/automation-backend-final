@@ -2,12 +2,11 @@ import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import api from '../services/api';
 import {
-  TrendingUp, BarChart2, PieChart as PieChartIcon, CheckCircle2, Clock, 
-  XCircle, Send, Users, Download
+  TrendingUp, BarChart2, CheckCircle2, Clock, 
+  XCircle, Send, Users, PieChart as PieChartIcon
 } from 'lucide-react';
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
 } from 'recharts';
 
 function StatCard({ icon, label, value, sub, iconBg, iconColor }) {
@@ -25,8 +24,10 @@ function StatCard({ icon, label, value, sub, iconBg, iconColor }) {
   );
 }
 
+const COLORS = ['#4F46E5', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#14B8A6'];
+
 export default function Analytics() {
-  const [data, setData] = useState({ summary: {}, byRole: {}, byDepartment: {}, monthly: [] });
+  const [data, setData] = useState({ summary: {}, byRole: {}, byDepartment: {}, departmentStats: [], monthly: [] });
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -39,9 +40,12 @@ export default function Analytics() {
   const { total = 0, accepted = 0, pending = 0, declined = 0, expired = 0, sent = 0, failed = 0, draft = 0, avgTimeToAcceptDays = 0 } = data.summary;
 
   const rolesData = Object.entries(data.byRole || {}).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([role, count]) => ({ role, count }));
-  const deptData = Object.entries(data.byDepartment || {}).sort((a, b) => b[1] - a[1]).slice(0, 6).map(([dept, count]) => ({ dept, count }));
-
-  const acceptanceRate = total > 0 ? Math.round((accepted / total) * 100) : 0;
+  const departments = Object.keys(data.byDepartment || {});
+  
+  const acceptanceRates = (data.departmentStats || []).map(d => ({
+    department: d.department,
+    rate: d.total > 0 ? Math.round((d.accepted / d.total) * 100) : 0
+  })).sort((a, b) => b.rate - a.rate).slice(0, 6);
 
   return (
     <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35 }}>
@@ -59,9 +63,9 @@ export default function Analytics() {
         <StatCard icon={<XCircle size={20} />}       label="Declined"        value={declined}        iconBg="#FEE2E2" iconColor="#DC2626" />
       </div>
 
-      {/* Middle Row: Bar Chart & Donut */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: '1rem', marginBottom: '1.25rem' }}>
-        {/* Offers by month */}
+      {/* Middle Row: Monthly Trend (Stacked) & Status Breakdown (Stacked) */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.25rem' }}>
+        {/* Offers by Month (Stacked by Dept) */}
         <div style={{ background: '#fff', borderRadius: 'var(--radius-card)', boxShadow: 'var(--shadow-card)', padding: '1.75rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1.25rem' }}>
             <TrendingUp size={18} color="var(--color-primary)" />
@@ -70,7 +74,7 @@ export default function Analytics() {
           {loading ? <p style={{ color: 'var(--color-muted)', fontSize: '0.85rem' }}>Loading…</p> :
            data.monthly.length === 0 ? <p style={{ color: 'var(--color-muted)', fontSize: '0.85rem' }}>No data yet.</p> :
            (
-             <div style={{ height: 250 }}>
+             <div style={{ height: 300 }}>
                <ResponsiveContainer width="100%" height="100%">
                  <BarChart data={data.monthly}>
                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB" />
@@ -80,68 +84,76 @@ export default function Analytics() {
                      cursor={{ fill: 'var(--color-primary)', opacity: 0.05 }}
                      contentStyle={{ borderRadius: 12, border: 'none', boxShadow: '0 4px 20px rgba(0,0,0,0.1)' }}
                    />
-                   <Bar dataKey="count" fill="var(--color-primary)" radius={[4, 4, 0, 0]} maxBarSize={40} />
+                   <Legend wrapperStyle={{ fontSize: 12, paddingTop: 10 }} />
+                   {departments.map((dept, i) => (
+                     <Bar key={dept} dataKey={dept} stackId="a" fill={COLORS[i % COLORS.length]} />
+                   ))}
                  </BarChart>
                </ResponsiveContainer>
              </div>
            )}
         </div>
 
-        {/* Status breakdown donut */}
-        <div style={{ background: '#fff', borderRadius: 'var(--radius-card)', boxShadow: 'var(--shadow-card)', padding: '1.75rem', display: 'flex', flexDirection: 'column' }}>
+        {/* Status Breakdown by Department */}
+        <div style={{ background: '#fff', borderRadius: 'var(--radius-card)', boxShadow: 'var(--shadow-card)', padding: '1.75rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1.25rem' }}>
-            <PieChartIcon size={18} color="var(--color-primary)" />
-            <h3 style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--color-heading)', margin: 0 }}>Acceptance Rate</h3>
+            <Users size={18} color="#8B5CF6" />
+            <h3 style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--color-heading)', margin: 0 }}>Status by Department</h3>
           </div>
-          
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-            <div style={{ position: 'relative', width: 140, height: 140 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={[
-                      { name: 'Accepted', value: accepted },
-                      { name: 'Other', value: Math.max(0, total - accepted) }
-                    ]}
-                    cx="50%" cy="50%" innerRadius={50} outerRadius={70}
-                    startAngle={90} endAngle={-270}
-                    dataKey="value" stroke="none"
-                  >
-                    <Cell fill="var(--color-primary)" />
-                    <Cell fill="#F1F1F8" />
-                  </Pie>
-                </PieChart>
-              </ResponsiveContainer>
-              <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', pointerEvents: 'none' }}>
-                <span style={{ fontSize: '1.75rem', fontWeight: 800, color: 'var(--color-heading)', lineHeight: 1 }}>{acceptanceRate}%</span>
-              </div>
-            </div>
-            
-            <div style={{ marginTop: '1.5rem', width: '100%' }}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
-                {[
-                  { label: 'Sent',    value: sent,     color: '#34D399' },
-                  { label: 'Pending', value: pending,  color: '#FBBF24' },
-                  { label: 'Draft',   value: draft,    color: '#9CA3AF' },
-                  { label: 'Expired', value: expired,  color: '#9B1C1C' },
-                  { label: 'Failed',  value: failed,   color: '#DC2626' },
-                  { label: 'Declined',value: declined, color: '#F87171' },
-                ].map(({ label, value, color }) => (
-                  <div key={label} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                    <div style={{ width: 10, height: 10, borderRadius: '50%', background: color, flexShrink: 0 }} />
-                    <span style={{ fontSize: '0.8rem', color: 'var(--color-body)', fontWeight: 500 }}>{label}</span>
-                    <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--color-heading)', marginLeft: 'auto' }}>{value}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
+          {loading ? <p style={{ color: 'var(--color-muted)', fontSize: '0.85rem' }}>Loading…</p> :
+           (!data.departmentStats || data.departmentStats.length === 0) ? <p style={{ color: 'var(--color-muted)', fontSize: '0.85rem' }}>No data yet.</p> :
+           (
+             <div style={{ height: 300 }}>
+               <ResponsiveContainer width="100%" height="100%">
+                 <BarChart data={data.departmentStats} layout="vertical" margin={{ left: 40, right: 20 }}>
+                   <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#E5E7EB" />
+                   <XAxis type="number" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: 'var(--color-muted)' }} allowDecimals={false} />
+                   <YAxis dataKey="department" type="category" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: 'var(--color-heading)', fontWeight: 600 }} dx={-10} width={120} />
+                   <Tooltip 
+                     cursor={{ fill: 'var(--color-secondary)', opacity: 0.05 }}
+                     contentStyle={{ borderRadius: 12, border: 'none', boxShadow: '0 4px 20px rgba(0,0,0,0.1)' }}
+                   />
+                   <Legend wrapperStyle={{ fontSize: 12, paddingTop: 10 }} />
+                   <Bar dataKey="accepted" stackId="a" fill="#10B981" name="Accepted" />
+                   <Bar dataKey="pending" stackId="a" fill="#FBBF24" name="Pending" />
+                   <Bar dataKey="declined" stackId="a" fill="#EF4444" name="Declined" />
+                 </BarChart>
+               </ResponsiveContainer>
+             </div>
+           )}
         </div>
       </div>
 
-      {/* Bottom Row: Designations & Departments */}
+      {/* Bottom Row: Acceptance Rate & Top Designations */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-        {/* Top roles */}
+        {/* Acceptance Rate by Department */}
+        <div style={{ background: '#fff', borderRadius: 'var(--radius-card)', boxShadow: 'var(--shadow-card)', padding: '1.75rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1.25rem' }}>
+            <PieChartIcon size={18} color="var(--color-primary)" />
+            <h3 style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--color-heading)', margin: 0 }}>Acceptance Rate by Department</h3>
+          </div>
+          {loading ? <p style={{ color: 'var(--color-muted)', fontSize: '0.85rem' }}>Loading…</p> :
+           acceptanceRates.length === 0 ? <p style={{ color: 'var(--color-muted)', fontSize: '0.85rem' }}>No data yet.</p> :
+           (
+             <div style={{ height: 260 }}>
+               <ResponsiveContainer width="100%" height="100%">
+                 <BarChart data={acceptanceRates} layout="vertical" margin={{ left: 40 }}>
+                   <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#E5E7EB" />
+                   <XAxis type="number" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: 'var(--color-muted)' }} allowDecimals={false} domain={[0, 100]} />
+                   <YAxis dataKey="department" type="category" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: 'var(--color-heading)', fontWeight: 600 }} dx={-10} width={120} />
+                   <Tooltip 
+                     cursor={{ fill: 'var(--color-primary)', opacity: 0.05 }}
+                     contentStyle={{ borderRadius: 12, border: 'none', boxShadow: '0 4px 20px rgba(0,0,0,0.1)' }}
+                     formatter={(value) => [`${value}%`, 'Acceptance Rate']}
+                   />
+                   <Bar dataKey="rate" fill="var(--color-primary)" radius={[0, 4, 4, 0]} barSize={24} />
+                 </BarChart>
+               </ResponsiveContainer>
+             </div>
+           )}
+        </div>
+
+        {/* Top Designations */}
         <div style={{ background: '#fff', borderRadius: 'var(--radius-card)', boxShadow: 'var(--shadow-card)', padding: '1.75rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1.25rem' }}>
             <Send size={18} color="var(--color-tertiary)" />
@@ -161,32 +173,6 @@ export default function Analytics() {
                      contentStyle={{ borderRadius: 12, border: 'none', boxShadow: '0 4px 20px rgba(0,0,0,0.1)' }}
                    />
                    <Bar dataKey="count" fill="var(--color-secondary)" radius={[0, 4, 4, 0]} barSize={24} />
-                 </BarChart>
-               </ResponsiveContainer>
-             </div>
-           )}
-        </div>
-
-        {/* Department Breakdown */}
-        <div style={{ background: '#fff', borderRadius: 'var(--radius-card)', boxShadow: 'var(--shadow-card)', padding: '1.75rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1.25rem' }}>
-            <Users size={18} color="#8B5CF6" />
-            <h3 style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--color-heading)', margin: 0 }}>Department Breakdown</h3>
-          </div>
-          {loading ? <p style={{ color: 'var(--color-muted)', fontSize: '0.85rem' }}>Loading…</p> :
-           deptData.length === 0 ? <p style={{ color: 'var(--color-muted)', fontSize: '0.85rem' }}>No data yet.</p> :
-           (
-             <div style={{ height: 260 }}>
-               <ResponsiveContainer width="100%" height="100%">
-                 <BarChart data={deptData} layout="vertical" margin={{ left: 40 }}>
-                   <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#E5E7EB" />
-                   <XAxis type="number" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: 'var(--color-muted)' }} allowDecimals={false} />
-                   <YAxis dataKey="dept" type="category" axisLine={false} tickLine={false} tick={{ fontSize: 12, fill: 'var(--color-heading)', fontWeight: 600 }} dx={-10} width={120} />
-                   <Tooltip 
-                     cursor={{ fill: '#8B5CF6', opacity: 0.05 }}
-                     contentStyle={{ borderRadius: 12, border: 'none', boxShadow: '0 4px 20px rgba(0,0,0,0.1)' }}
-                   />
-                   <Bar dataKey="count" fill="#8B5CF6" radius={[0, 4, 4, 0]} barSize={24} />
                  </BarChart>
                </ResponsiveContainer>
              </div>

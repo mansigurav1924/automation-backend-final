@@ -67,7 +67,16 @@ export default function SignUp() {
               <label className="form-label">Department</label>
               <div style={{ position: 'relative' }}>
                 <User size={15} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--color-muted)', pointerEvents: 'none' }} />
-                <input type="text" value={department} onChange={e => setDepartment(e.target.value)} className="form-input" style={{ paddingLeft: '2.2rem' }} placeholder="e.g. Engineering, Sales" />
+                <select value={department} required onChange={e => setDepartment(e.target.value)} className="form-input" style={{ paddingLeft: '2.2rem', appearance: 'none' }}>
+                  <option value="" disabled>Select your department</option>
+                  <option value="Social Media Intern">Social Media Intern</option>
+                  <option value="Sales Development Intern">Sales Development Intern</option>
+                  <option value="HR Intern">HR Intern</option>
+                  <option value="AI Engineering Intern">AI Engineering Intern</option>
+                  <option value="Business Analyst Intern">Business Analyst Intern</option>
+                  <option value="Content Creator Intern">Content Creator Intern</option>
+                  <option value="Full Stack Intern">Full Stack Intern</option>
+                </select>
               </div>
             </div>
 

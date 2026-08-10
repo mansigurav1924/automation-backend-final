@@ -23,8 +23,8 @@ function AppLayout() {
   const authRoutes = ['/login', '/signup', '/forgot-password', '/reset-password'];
   const isAuthPage = authRoutes.includes(location.pathname);
   const user = getAuthUser();
-  const effectiveRole = user?.role === 'user' ? 'hr' : user?.role;
-  const defaultDashboard = effectiveRole === 'admin' ? '/admin/dashboard' : '/hr/dashboard';
+  const effectiveRole = user?.role;
+  const defaultDashboard = effectiveRole === 'admin' ? '/admin/dashboard' : '/manager/dashboard';
 
   return (
     <div style={{ display: 'flex', minHeight: '100vh', background: '#F0F2F8', fontFamily: 'var(--font-sans)', position: 'relative', overflow: 'hidden' }}>
@@ -68,9 +68,9 @@ function AppLayout() {
             
             {/* Protected Routes */}
             <Route path="/"                  element={<Navigate to={user ? defaultDashboard : '/login'} replace />} />
-            <Route path="/hr/dashboard"      element={<ProtectedRoute allowedRoles={['hr', 'admin']}><Dashboard /></ProtectedRoute>} />
+            <Route path="/manager/dashboard" element={<ProtectedRoute allowedRoles={['manager', 'admin']}><Dashboard /></ProtectedRoute>} />
             <Route path="/admin/dashboard"   element={<ProtectedRoute allowedRoles={['admin']}><Dashboard /></ProtectedRoute>} />
-            <Route path="/generate"          element={<ProtectedRoute allowedRoles={['hr', 'admin']}><GenerateOffer /></ProtectedRoute>} />
+            <Route path="/generate"          element={<ProtectedRoute allowedRoles={['manager', 'admin']}><GenerateOffer /></ProtectedRoute>} />
             <Route path="/offers/:id"        element={<ProtectedRoute><OfferDetail /></ProtectedRoute>} />
             <Route path="/offers/:id/edit"   element={<ProtectedRoute><EditOffer /></ProtectedRoute>} />
             <Route path="/analytics"         element={<ProtectedRoute><Analytics /></ProtectedRoute>} />

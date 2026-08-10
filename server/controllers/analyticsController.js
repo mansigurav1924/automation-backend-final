@@ -32,6 +32,9 @@ const getAnalyticsSummary = async (req, res) => {
     const byRole = {};
     const byDepartment = {};
     const byMonth = {};
+    
+    // New structures for detailed department stats
+    const deptStats = {};
 
     dataRows.forEach(row => {
       total++;
@@ -57,12 +60,24 @@ const getAnalyticsSummary = async (req, res) => {
       byRole[designation] = (byRole[designation] || 0) + 1;
       byDepartment[department] = (byDepartment[department] || 0) + 1;
       
+      // Detailed department stats
+      if (!deptStats[department]) {
+        deptStats[department] = { department, total: 0, accepted: 0, pending: 0, declined: 0, expired: 0 };
+      }
+      deptStats[department].total++;
+      if (effectiveStatus === 'Accepted') deptStats[department].accepted++;
+      else if (effectiveStatus === 'Declined') deptStats[department].declined++;
+      else if (effectiveStatus === 'Expired') deptStats[department].expired++;
+      else deptStats[department].pending++;
+
+      // Monthly stacked stats
       try {
         const d = new Date(created_at);
         const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
         const label = d.toLocaleString('en-IN', { month: 'short', year: '2-digit' });
-        if (!byMonth[key]) byMonth[key] = { label, count: 0 };
-        byMonth[key].count++;
+        if (!byMonth[key]) byMonth[key] = { label, total: 0 };
+        byMonth[key].total++;
+        byMonth[key][department] = (byMonth[key][department] || 0) + 1;
       } catch {}
     });
 
@@ -70,6 +85,8 @@ const getAnalyticsSummary = async (req, res) => {
       .sort(([a], [b]) => a.localeCompare(b))
       .slice(-6)
       .map(([, data]) => data);
+      
+    const departmentStats = Object.values(deptStats).sort((a, b) => b.total - a.total);
 
     let avgTimeToAcceptDays = 0;
     if (supabase) {
@@ -103,6 +120,7 @@ const getAnalyticsSummary = async (req, res) => {
       summary: { total, accepted, pending, declined, expired, sent, failed, draft, avgTimeToAcceptDays },
       byRole,
       byDepartment,
+      departmentStats,
       monthly
     });
 

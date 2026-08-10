@@ -20,9 +20,6 @@ module.exports = function(req, res, next) {
     
     // Add user from payload
     req.user = decoded;
-    if (req.user.role === 'user') {
-      req.user.role = 'hr';
-    }
     next();
   } catch (err) {
     res.status(401).json({ error: 'Unauthorized' });

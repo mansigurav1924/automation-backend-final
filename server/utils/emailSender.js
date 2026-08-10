@@ -24,11 +24,17 @@ const sendOfferEmail = async (candidateEmail, candidateName, pdfBuffer, options 
   const subject = options.subject
     || `Your Internship Offer Letter from RGTvertex`;
 
-  const htmlBody = options.htmlBody
+  const htmlBody = options.html
     || `<p>Dear <strong>${candidateName}</strong>,</p>
-        <p>Congratulations! We are thrilled to offer you an internship at RGTvertex. 
-        Please find your offer letter attached.</p>
-        <p>Best regards,<br/><strong>HR Team, RGTvertex</strong></p>`;
+        <p>Greetings from RGTvertex!</p>
+        <p>Congratulations!</p>
+        <p>We are delighted to offer you an internship opportunity with RGTvertex. We appreciate your interest in joining our team and are excited to have you onboard.</p>
+        <p>Please find your Internship Offer Letter attached to this email. The document contains your internship details, including your position, department, internship duration, mode of work, and other important information. Kindly review the offer letter carefully.</p>
+        <p>If you accept this internship offer, please reply to this email with your confirmation at your earliest convenience.</p>
+        <p>We are confident that this internship will provide you with valuable hands-on experience, practical learning opportunities, and professional growth. We look forward to working with you and wish you a successful internship journey at RGTvertex.</p>
+        <p>If you have any questions or require any clarification, please feel free to reply to this email.</p>
+        <p>Thank you, and welcome to RGTvertex!</p>
+        <p>Warm Regards,<br/><strong>HR Team, RGTvertex</strong></p>`;
 
   const mailOptions = {
     from: `"RGTvertex HR" <${process.env.EMAIL_USER}>`,

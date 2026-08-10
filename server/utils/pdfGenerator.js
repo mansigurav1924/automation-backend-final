@@ -28,7 +28,11 @@ const generatePdf = async (candidateData, options = {}) => {
       htmlContent = htmlContent.replace(regex, safeValue);
     }
 
-    const browser = await puppeteer.launch({ headless: 'new', channel: 'chrome' });
+    const browser = await puppeteer.launch({
+      headless: 'new',
+      channel: 'chrome',
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
+    });
     const page = await browser.newPage();
     
     await page.setContent(htmlContent, { waitUntil: 'networkidle0' });
