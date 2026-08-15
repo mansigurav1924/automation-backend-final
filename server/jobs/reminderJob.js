@@ -1,16 +1,14 @@
 const cron = require('node-cron');
-const sheets = require('../config/googleSheetsClient');
 const supabase = require('../config/supabaseClient');
 const sendOfferEmail = require('../utils/emailSender');
 const { logAudit } = require('../utils/auditLogger');
 const { createResponseToken } = require('../controllers/responseController');
 
-const SPREADSHEET_ID = process.env.GOOGLE_SHEET_ID;
 const REMINDER_DELAY_DAYS = 3; 
 
 async function runReminderCheck() {
-  if (!sheets || !SPREADSHEET_ID || !supabase) {
-    console.warn('[ReminderJob] Sheets/Supabase not configured, skipping.');
+  if (!supabase) {
+    console.warn('[ReminderJob] Supabase not configured, skipping.');
     return;
   }
 
@@ -18,29 +16,24 @@ async function runReminderCheck() {
   jobStatus.lastRun = new Date().toISOString();
 
   try {
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'Sheet1!A:P',
-    });
+    const { data: rows, error: fetchError } = await supabase
+      .from('offers')
+      .select('*')
+      .eq('status', 'Sent');
 
-    const rows = response.data.values || [];
-    if (rows.length <= 1) return; // header only
+    if (fetchError) throw fetchError;
+    if (!rows || rows.length === 0) return;
 
     const now = new Date();
     let reminderCount = 0;
 
-    for (let i = 1; i < rows.length; i++) {
-      const row = rows[i];
-      const candidateName = row[0] || 'Candidate';
-      const candidateEmail = row[1];
-      const created_at = row[8];
-      const status = row[9] || '';
-      const offerId = row[10];
-      const validUntil = row[11];
+    for (const row of rows) {
+      const candidateName = row.candidate_name || 'Candidate';
+      const candidateEmail = row.candidate_email;
+      const created_at = row.created_at;
+      const offerId = row.id;
+      const validUntil = row.valid_until;
 
-      // Only care about Sent offers
-      if (status !== 'Sent') continue;
-      
       const createdDate = new Date(created_at);
       if (isNaN(createdDate)) continue;
 
