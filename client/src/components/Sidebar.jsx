@@ -15,9 +15,15 @@ export default function Sidebar() {
 
   const NAV_ITEMS = [
     { to: dashboardPath,   label: 'Dashboard',   icon: LayoutDashboard },
-    { to: '/analytics',    label: 'Analytics',   icon: BarChart2 },
     { to: '/candidates',   label: 'Candidates',  icon: Users },
     { to: '/generate',     label: 'New Offer',   icon: PlusCircle },
+  ];
+
+  const ADMIN_NAV_ITEMS = [
+    { to: '/admin/users',  label: 'User Mgmt',   icon: Users },
+    { to: '/admin/offers', label: 'All Offers',  icon: LayoutDashboard },
+    { to: '/admin/health', label: 'Sys Health',  icon: BarChart2 },
+    { to: '/admin/audit',  label: 'Audit Log',   icon: BarChart2 },
   ];
 
   const handleLogout = () => {
@@ -93,6 +99,55 @@ export default function Sidebar() {
             );
           })}
         </ul>
+
+        {effectiveRole === 'admin' && (
+          <>
+
+            <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+              {ADMIN_NAV_ITEMS.map(({ to, label, icon: Icon }) => {
+                const isActive = location.pathname === to;
+                return (
+                  <li key={to}>
+                    <Link
+                      to={to}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.75rem',
+                        padding: '0.7rem 0.875rem',
+                        borderRadius: 12,
+                        textDecoration: 'none',
+                        transition: 'all 0.18s',
+                        background: isActive ? 'rgba(91,46,255,0.22)' : 'transparent',
+                        color: isActive ? '#fff' : 'rgba(255,255,255,0.55)',
+                        fontWeight: isActive ? 600 : 500,
+                        fontSize: '0.875rem',
+                        borderLeft: isActive ? '3px solid var(--color-primary)' : '3px solid transparent',
+                      }}
+                      onMouseEnter={e => { if (!isActive) { e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; e.currentTarget.style.color = 'rgba(255,255,255,0.85)'; }}}
+                      onMouseLeave={e => { if (!isActive) { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'rgba(255,255,255,0.55)'; }}}
+                    >
+                      <div style={{
+                        width: 32, height: 32,
+                        borderRadius: 9,
+                        background: isActive ? 'var(--color-primary)' : 'rgba(255,255,255,0.07)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        flexShrink: 0,
+                        transition: 'background 0.18s',
+                      }}>
+                        <Icon size={15} color={isActive ? '#fff' : 'rgba(255,255,255,0.55)'} />
+                      </div>
+                      {label}
+                      {isActive && (
+                        <div style={{ marginLeft: 'auto', width: 6, height: 6, borderRadius: '50%', background: 'var(--color-primary)', boxShadow: '0 0 8px var(--color-primary)' }} />
+                      )}
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
+          </>
+        )}
       </nav>
 
       {/* Footer */}

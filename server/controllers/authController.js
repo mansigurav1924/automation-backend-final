@@ -10,74 +10,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'supersecret123';
 // ── Controllers ─────────────────────────────────────────────────────
 
 const signup = async (req, res) => {
-  try {
-    const { name, email, password, role, department } = req.body;
-    if (!name || !email || !password) {
-      return res.status(400).json({ error: 'Name, email, and password are required' });
-    }
-
-    // Determine role (default to 'manager', prevent public admin creation)
-    const assignedRole = (role && role.toLowerCase() === 'admin') ? 'admin' : 'manager';
-
-    if (assignedRole === 'manager' && !department) {
-      return res.status(400).json({ error: 'Department is required for managers' });
-    }
-
-    if (!supabase) {
-      return res.status(503).json({ error: 'Database connection not available' });
-    }
-
-    // Check if user exists
-    const { data: existingUser, error: checkError } = await supabase
-      .from('users')
-      .select('id')
-      .eq('email', email)
-      .single();
-
-    if (existingUser) {
-      return res.status(400).json({ error: 'User already exists' });
-    }
-    
-    // Ignore error if it's just "No rows found"
-    if (checkError && checkError.code !== 'PGRST116') {
-      throw checkError;
-    }
-
-    const salt = await bcrypt.genSalt(10);
-    const passwordHash = await bcrypt.hash(password, salt);
-
-    // Insert user
-    const { data: newUser, error: insertError } = await supabase
-      .from('users')
-      .insert([{
-        name,
-        email,
-        password_hash: passwordHash,
-        role: assignedRole,
-        department: assignedRole === 'manager' ? department : null
-      }])
-      .select()
-      .single();
-
-    if (insertError) throw insertError;
-
-    // Sync to Google Sheets
-    await appendUserToSheet(newUser);
-
-    const payload = {
-      userId: newUser.id,
-      email: newUser.email,
-      name: newUser.name,
-      role: newUser.role,
-      department: newUser.department
-    };
-
-    const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' });
-    res.status(201).json({ message: 'User created', token, user: payload });
-  } catch (error) {
-    console.error('Signup error:', error);
-    res.status(500).json({ error: error.message || 'Internal Server Error' });
-  }
+  return res.status(403).json({ error: 'Public registration is disabled. Please contact an administrator.' });
 };
 
 const login = async (req, res) => {
@@ -155,7 +88,13 @@ const forgotPassword = async (req, res) => {
     // Send email
     const transporter = nodemailer.createTransport({
       service: 'gmail',
-      auth: {
+      auth: process.env.GMAIL_CLIENT_ID ? {
+        type: 'OAuth2',
+        user: process.env.EMAIL_USER,
+        clientId: process.env.GMAIL_CLIENT_ID,
+        clientSecret: process.env.GMAIL_CLIENT_SECRET,
+        refreshToken: process.env.GMAIL_REFRESH_TOKEN,
+      } : {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS,
       },

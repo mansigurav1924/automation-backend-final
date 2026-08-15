@@ -1,12 +1,14 @@
 import { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Link } from 'react-router-dom';
+import { AreaChart, Area, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import api from '../services/api';
 import { getAuthUser } from '../utils/auth';
-import { Search, FileText, CheckCircle2, XCircle, Clock, Users, Send, AlertCircle, PlusCircle, Inbox, ChevronUp, ChevronDown, Filter, Download, Timer } from 'lucide-react';
+import { Search, FileText, CheckCircle2, XCircle, Clock, Users, Send, AlertCircle, PlusCircle, Inbox, ChevronUp, ChevronDown, Filter, Download, Timer, RefreshCw } from 'lucide-react';
 
 export default function Dashboard() {
   const [offers, setOffers]   = useState([]);
+  const [monthlyTrend, setMonthlyTrend] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch]   = useState('');
   const [sortCol, setSortCol] = useState('created_at');
@@ -22,19 +24,34 @@ export default function Dashboard() {
   const isAdmin = user?.role === 'admin';
 
   useEffect(() => {
-    const fetchOffers = async () => {
+    const fetchData = async () => {
       try {
-        const response = await api.get('/offers');
-        setOffers(response.data);
+        const [offersRes, analyticsRes] = await Promise.all([
+          api.get('/offers').catch(() => ({ data: [] })),
+          api.get('/analytics/summary').catch(() => ({ data: { monthly: [] } }))
+        ]);
+        setOffers(offersRes.data || []);
+        setMonthlyTrend(analyticsRes.data?.monthly || []);
       } catch (err) {
-        console.error('Failed to fetch offers:', err);
+        console.error('Failed to fetch dashboard data:', err);
         setOffers([]);
       } finally {
         setLoading(false);
       }
     };
-    fetchOffers();
+    fetchData();
   }, []);
+
+  const handleResend = async (offerId) => {
+    try {
+      const { data } = await api.post(`/offers/${offerId}/resend`);
+      // Update local state to reflect the new status
+      setOffers(prev => prev.map(o => o.id === offerId ? { ...o, status: data.status || 'Pending' } : o));
+    } catch (err) {
+      console.error('Failed to resend offer:', err);
+      alert(err.response?.data?.error || 'Failed to resend');
+    }
+  };
 
   const toggleSort = (col) => {
     if (sortCol === col) setSortDesc(!sortDesc);
@@ -98,7 +115,17 @@ export default function Dashboard() {
     pending: offers.filter(o => o.status === 'Draft' || o.status === 'Pending').length,
     expired: offers.filter(o => o.status === 'Expired').length,
     rejected: rejectedOffers.length,
+    failed:  offers.filter(o => o.status === 'Failed').length,
   };
+
+  const deptData = useMemo(() => {
+    const counts = {};
+    offers.forEach(o => {
+      const d = o.department || 'Unknown';
+      counts[d] = (counts[d] || 0) + 1;
+    });
+    return Object.entries(counts).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count);
+  }, [offers]);
 
   const exportCSV = async () => {
     setExporting(true);
@@ -149,6 +176,74 @@ export default function Dashboard() {
         <KpiCard icon={<Timer size={20} />}        label="Expired"      value={stats.expired} iconBg="#FEE2E2" iconColor="#9B1C1C" />
         <KpiCard icon={<XCircle size={20} />}      label="Rejected"     value={stats.rejected} iconBg="#FEE2E2" iconColor="#DC2626" />
       </div>
+
+      {/* Failed Emails Alert Banner */}
+      {!loading && stats.failed > 0 && (
+        <div style={{
+          background: '#FEF2F2', border: '1px solid #FCA5A5', borderRadius: 'var(--radius-inner)',
+          padding: '1rem 1.5rem', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          flexWrap: 'wrap', gap: '1rem'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', color: '#991B1B' }}>
+            <AlertCircle size={20} />
+            <span style={{ fontWeight: 600, fontSize: '0.9rem' }}>
+              {stats.failed} {stats.failed === 1 ? 'offer email' : 'offer emails'} failed to send — review and retry
+            </span>
+          </div>
+          <button 
+            onClick={() => setStatusFilter('Failed')} 
+            className="btn" 
+            style={{ background: '#DC2626', color: '#fff', fontSize: '0.8rem', padding: '0.4rem 0.8rem' }}
+          >
+            View Failed Offers
+          </button>
+        </div>
+      )}
+
+      {/* Analytics Charts */}
+      {offers.length > 0 && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))', gap: '1.5rem', marginBottom: '2rem' }}>
+          {/* Department Chart */}
+          <div style={{ background: '#fff', borderRadius: 'var(--radius-card)', boxShadow: 'var(--shadow-card)', padding: '1.5rem' }}>
+            <h2 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--color-heading)', margin: '0 0 1.25rem 0' }}>Offers by Department</h2>
+            <div style={{ height: 260 }}>
+              {loading ? <div className="skeleton" style={{ height: '100%', borderRadius: 8 }}></div> : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={deptData} layout="vertical" margin={{ top: 10, right: 20, left: 20, bottom: 0 }}>
+                    <XAxis type="number" hide />
+                    <YAxis dataKey="name" type="category" axisLine={false} tickLine={false} width={100} style={{ fontSize: '0.75rem', fill: 'var(--color-body)' }} />
+                    <Tooltip cursor={{ fill: 'rgba(0,0,0,0.02)' }} contentStyle={{ borderRadius: 8, border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }} />
+                    <Bar dataKey="count" fill="var(--color-primary)" radius={[0, 4, 4, 0]} barSize={24} />
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+          </div>
+
+          {/* Monthly Trend Chart */}
+          <div style={{ background: '#fff', borderRadius: 'var(--radius-card)', boxShadow: 'var(--shadow-card)', padding: '1.5rem' }}>
+            <h2 style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--color-heading)', margin: '0 0 1.25rem 0' }}>Offers Generated (Last 6 Months)</h2>
+            <div style={{ height: 260 }}>
+              {loading ? <div className="skeleton" style={{ height: '100%', borderRadius: 8 }}></div> : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={monthlyTrend} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                    <defs>
+                      <linearGradient id="colorTotal" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="var(--color-primary)" stopOpacity={0.3}/>
+                        <stop offset="95%" stopColor="var(--color-primary)" stopOpacity={0}/>
+                      </linearGradient>
+                    </defs>
+                    <XAxis dataKey="label" axisLine={false} tickLine={false} style={{ fontSize: '0.75rem', fill: 'var(--color-body)' }} />
+                    <YAxis axisLine={false} tickLine={false} style={{ fontSize: '0.75rem', fill: 'var(--color-body)' }} />
+                    <Tooltip contentStyle={{ borderRadius: 8, border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }} />
+                    <Area type="monotone" dataKey="total" stroke="var(--color-primary)" strokeWidth={3} fillOpacity={1} fill="url(#colorTotal)" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Main table card */}
       <div style={{ background: '#fff', borderRadius: 'var(--radius-card)', boxShadow: 'var(--shadow-card)', overflow: 'hidden', marginBottom: '2rem' }}>
@@ -270,6 +365,22 @@ export default function Dashboard() {
                     <td>{new Date(offer.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</td>
                     <td><StatusBadge status={offer.status} /></td>
                     <td style={{ textAlign: 'right' }}>
+                      {offer.status === 'Failed' && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleResend(offer.id); }}
+                          style={{
+                            background: '#FEE2E2', border: 'none', borderRadius: 8,
+                            padding: '0.4rem 0.5rem', cursor: 'pointer',
+                            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                            marginRight: '0.5rem', color: '#DC2626', transition: 'background 0.15s',
+                          }}
+                          onMouseEnter={e => e.currentTarget.style.background = '#FCA5A5'}
+                          onMouseLeave={e => e.currentTarget.style.background = '#FEE2E2'}
+                          title="Resend Failed Offer"
+                        >
+                          <RefreshCw size={15} />
+                        </button>
+                      )}
                       <Link
                         to={`/offers/${offer.id}`}
                         onClick={e => e.stopPropagation()}

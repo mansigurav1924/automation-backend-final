@@ -6,7 +6,6 @@ import GenerateOffer from './pages/GenerateOffer';
 import Dashboard from './pages/Dashboard';
 import OfferDetail from './pages/OfferDetail';
 import EditOffer from './pages/EditOffer';
-import Analytics from './pages/Analytics';
 import Candidates from './pages/Candidates';
 import Templates from './pages/Templates';
 import Login from './pages/Login';
@@ -15,6 +14,11 @@ import ForgotPassword from './pages/ForgotPassword';
 import ResetPassword from './pages/ResetPassword';
 import NotFound from './pages/NotFound';
 import Respond from './pages/Respond';
+import AdminDashboard from './pages/AdminDashboard';
+import AuditLog from './pages/AuditLog';
+import UserManagementPage from './pages/UserManagementPage';
+import SystemHealthPage from './pages/SystemHealthPage';
+import AllOffersPage from './pages/AllOffersPage';
 import ProtectedRoute from './components/ProtectedRoute';
 import { getAuthUser } from './utils/auth';
 
@@ -69,11 +73,14 @@ function AppLayout() {
             {/* Protected Routes */}
             <Route path="/"                  element={<Navigate to={user ? defaultDashboard : '/login'} replace />} />
             <Route path="/manager/dashboard" element={<ProtectedRoute allowedRoles={['manager', 'admin']}><Dashboard /></ProtectedRoute>} />
-            <Route path="/admin/dashboard"   element={<ProtectedRoute allowedRoles={['admin']}><Dashboard /></ProtectedRoute>} />
+            <Route path="/admin/dashboard"   element={<ProtectedRoute allowedRoles={['admin']}><AdminDashboard /></ProtectedRoute>} />
+            <Route path="/admin/audit"       element={<ProtectedRoute allowedRoles={['admin']}><AuditLog /></ProtectedRoute>} />
+            <Route path="/admin/users"       element={<ProtectedRoute allowedRoles={['admin']}><UserManagementPage /></ProtectedRoute>} />
+            <Route path="/admin/health"      element={<ProtectedRoute allowedRoles={['admin']}><SystemHealthPage /></ProtectedRoute>} />
+            <Route path="/admin/offers"      element={<ProtectedRoute allowedRoles={['admin']}><AllOffersPage /></ProtectedRoute>} />
             <Route path="/generate"          element={<ProtectedRoute allowedRoles={['manager', 'admin']}><GenerateOffer /></ProtectedRoute>} />
             <Route path="/offers/:id"        element={<ProtectedRoute><OfferDetail /></ProtectedRoute>} />
             <Route path="/offers/:id/edit"   element={<ProtectedRoute><EditOffer /></ProtectedRoute>} />
-            <Route path="/analytics"         element={<ProtectedRoute><Analytics /></ProtectedRoute>} />
             <Route path="/candidates"        element={<ProtectedRoute><Candidates /></ProtectedRoute>} />
             <Route path="/templates"         element={<ProtectedRoute><Templates /></ProtectedRoute>} />
             
