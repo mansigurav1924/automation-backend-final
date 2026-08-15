@@ -9,7 +9,55 @@ const JWT_SECRET = process.env.JWT_SECRET || 'supersecret123';
 // ── Controllers ─────────────────────────────────────────────────────
 
 const signup = async (req, res) => {
-  return res.status(403).json({ error: 'Public registration is disabled. Please contact an administrator.' });
+  try {
+    const { name, email, password, department, role } = req.body;
+    
+    if (!supabase) return res.status(503).json({ error: 'Database connection not available' });
+
+    const { data: existingUser } = await supabase
+      .from('users')
+      .select('id')
+      .eq('email', email)
+      .single();
+
+    if (existingUser) {
+      return res.status(400).json({ error: 'User already exists' });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    const passwordHash = await bcrypt.hash(password, salt);
+
+    const assignedRole = (role && role.toLowerCase() === 'admin') ? 'admin' : 'manager';
+
+    // Insert user
+    const { data: newUser, error: insertError } = await supabase
+      .from('users')
+      .insert([{
+        name,
+        email,
+        password_hash: passwordHash,
+        role: assignedRole,
+        department: assignedRole === 'manager' ? department : null
+      }])
+      .select()
+      .single();
+
+    if (insertError) throw insertError;
+
+    const payload = {
+      userId: newUser.id,
+      email: newUser.email,
+      name: newUser.name,
+      role: newUser.role,
+      department: newUser.department
+    };
+
+    const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' });
+    res.status(201).json({ message: 'User created', token, user: payload });
+  } catch (error) {
+    console.error('Signup error:', error);
+    res.status(500).json({ error: error.message || 'Internal Server Error' });
+  }
 };
 
 const login = async (req, res) => {
