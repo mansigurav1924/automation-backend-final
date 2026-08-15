@@ -7,11 +7,21 @@ let sheets = null;
 
 try {
   if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
-    const auth = new google.auth.GoogleAuth({
-      keyFile: process.env.GOOGLE_APPLICATION_CREDENTIALS,
-      scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-    });
+    let authOptions = { scopes: ['https://www.googleapis.com/auth/spreadsheets'] };
+    
+    // Check if the env variable contains the raw JSON string (starts with '{')
+    if (process.env.GOOGLE_APPLICATION_CREDENTIALS.trim().startsWith('{')) {
+      try {
+        authOptions.credentials = JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS);
+      } catch (parseError) {
+        console.error('Failed to parse GOOGLE_APPLICATION_CREDENTIALS as JSON.', parseError);
+      }
+    } else {
+      // Otherwise, assume it's a file path
+      authOptions.keyFile = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+    }
 
+    const auth = new google.auth.GoogleAuth(authOptions);
     sheets = google.sheets({ version: 'v4', auth });
   } else {
     console.warn('Google Sheets credentials not provided in .env');
