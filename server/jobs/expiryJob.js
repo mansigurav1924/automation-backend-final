@@ -1,14 +1,12 @@
 const cron = require('node-cron');
-const sheets = require('../config/googleSheetsClient');
-
-const SPREADSHEET_ID = process.env.GOOGLE_SHEET_ID;
+const supabase = require('../config/supabaseClient');
 
 // Terminal statuses that should never be auto-overwritten
-const TERMINAL_STATUSES = ['Accepted', 'Declined', 'Expired'];
+const TERMINAL_STATUSES = ['Accepted', 'Rejected', 'Expired', 'Declined'];
 
 async function runExpiryCheck() {
-  if (!sheets || !SPREADSHEET_ID) {
-    console.warn('[ExpiryJob] Google Sheets not configured, skipping.');
+  if (!supabase) {
+    console.warn('[ExpiryJob] Supabase not configured, skipping.');
     return;
   }
 
@@ -16,42 +14,37 @@ async function runExpiryCheck() {
   jobStatus.lastRun = new Date().toISOString();
 
   try {
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'Sheet1!A:L',
-    });
+    const { data: rows, error } = await supabase
+      .from('offers')
+      .select('*');
 
-    const rows = response.data.values || [];
-    if (rows.length <= 1) return; // header only
+    if (error) throw error;
+    if (!rows || rows.length === 0) return;
 
     const now = new Date();
     let expiredCount = 0;
 
-    // Process data rows (skip header at index 0)
-    for (let i = 1; i < rows.length; i++) {
-      const row = rows[i];
-      const sheetRow = i + 1; // Google Sheets is 1-indexed
-
-      const emailStatus = row[9] || '';
-      const validUntil  = row[11] || '';
-
+    for (const row of rows) {
       // Skip if no expiry date set, or already in terminal status
-      if (!validUntil || TERMINAL_STATUSES.includes(emailStatus)) continue;
+      if (!row.valid_until || TERMINAL_STATUSES.includes(row.status)) continue;
 
-      const expiryDate = new Date(validUntil);
+      const expiryDate = new Date(row.valid_until);
       if (isNaN(expiryDate)) continue; // bad date format, skip
 
       if (now > expiryDate) {
-        // Flip status to Expired in column J
-        await sheets.spreadsheets.values.update({
-          spreadsheetId: SPREADSHEET_ID,
-          range: `Sheet1!J${sheetRow}`,
-          valueInputOption: 'USER_ENTERED',
-          resource: { values: [['Expired']] }
-        });
+        // Flip status to Expired
+        const { error: updateError } = await supabase
+          .from('offers')
+          .update({ status: 'Expired' })
+          .eq('id', row.id);
 
-        const candidateName = row[0] || 'Unknown';
-        console.log(`[ExpiryJob] Marked offer for "${candidateName}" (row ${sheetRow}) as Expired.`);
+        if (updateError) {
+          console.error(`[ExpiryJob] Failed to update offer ${row.id}:`, updateError.message);
+          continue;
+        }
+
+        const candidateName = row.candidate_name || 'Unknown';
+        console.log(`[ExpiryJob] Marked offer for "${candidateName}" (ID ${row.id}) as Expired.`);
         expiredCount++;
       }
     }
@@ -65,7 +58,7 @@ async function runExpiryCheck() {
 const jobStatus = { lastRun: null };
 
 function startExpiryJob() {
-  // Run at 00:05 UTC every day (give Sheets API a moment to be ready)
+  // Run at 00:05 UTC every day
   cron.schedule('5 0 * * *', runExpiryCheck, {
     scheduled: true,
     timezone: 'UTC'
