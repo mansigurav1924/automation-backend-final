@@ -3,66 +3,20 @@ const jwt = require('jsonwebtoken');
 const supabase = require('../config/supabaseClient');
 const nodemailer = require('nodemailer');
 const crypto = require('crypto');
+const { appendUserToSheet } = require('../utils/sheetsSync');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'supersecret123';
 
 // ── Controllers ─────────────────────────────────────────────────────
 
 const signup = async (req, res) => {
-  try {
-    const { name, email, password, department, role } = req.body;
-    
-    if (!supabase) return res.status(503).json({ error: 'Database connection not available' });
-
-    const { data: existingUser } = await supabase
-      .from('users')
-      .select('id')
-      .eq('email', email)
-      .single();
-
-    if (existingUser) {
-      return res.status(400).json({ error: 'User already exists' });
-    }
-
-    const salt = await bcrypt.genSalt(10);
-    const passwordHash = await bcrypt.hash(password, salt);
-
-    const assignedRole = (role && role.toLowerCase() === 'admin') ? 'admin' : 'manager';
-
-    // Insert user
-    const { data: newUser, error: insertError } = await supabase
-      .from('users')
-      .insert([{
-        name,
-        email,
-        password_hash: passwordHash,
-        role: assignedRole,
-        department: assignedRole === 'manager' ? department : null
-      }])
-      .select()
-      .single();
-
-    if (insertError) throw insertError;
-
-    const payload = {
-      userId: newUser.id,
-      email: newUser.email,
-      name: newUser.name,
-      role: newUser.role,
-      department: newUser.department
-    };
-
-    const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' });
-    res.status(201).json({ message: 'User created', token, user: payload });
-  } catch (error) {
-    console.error('Signup error:', error);
-    res.status(500).json({ error: error.message || 'Internal Server Error' });
-  }
+  return res.status(403).json({ error: 'Public registration is disabled. Please contact an administrator.' });
 };
 
 const login = async (req, res) => {
   try {
     const { email, password } = req.body;
+    console.log('[login] Attempt:', { email, passwordProvided: !!password });
     
     if (!supabase) return res.status(503).json({ error: 'Database connection not available' });
 
@@ -72,11 +26,14 @@ const login = async (req, res) => {
       .eq('email', email)
       .single();
     
+    console.log('[login] DB lookup:', { found: !!user, error: error?.message || null });
+
     if (error || !user) {
       return res.status(401).json({ error: 'Invalid email or password' });
     }
 
     const isMatch = await bcrypt.compare(password, user.password_hash);
+    console.log('[login] Password match:', isMatch);
     if (!isMatch) {
       return res.status(401).json({ error: 'Invalid email or password' });
     }
@@ -90,6 +47,7 @@ const login = async (req, res) => {
     };
 
     const token = jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' });
+    console.log('[login] Success — token issued for:', email, 'role:', user.role);
     res.status(200).json({ token, user: payload });
   } catch (error) {
     console.error('Login error:', error);
