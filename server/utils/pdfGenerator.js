@@ -29,13 +29,16 @@ const generatePdf = async (candidateData, options = {}) => {
       htmlContent = htmlContent.replace(regex, safeValue);
     }
 
+    const isProduction = process.env.NODE_ENV === 'production';
+    const executablePath = isProduction
+      ? await chromium.executablePath  // property, not a function
+      : '/usr/bin/chromium-browser';   // local fallback
+
     const browser = await puppeteer.launch({
       args: chromium.args,
       defaultViewport: chromium.defaultViewport,
-      executablePath: process.env.NODE_ENV === 'production'
-        ? await chromium.executablePath()
-        : puppeteer.executablePath(),
-      headless: chromium.headless,
+      executablePath,
+      headless: true,
     });
     const page = await browser.newPage();
     
