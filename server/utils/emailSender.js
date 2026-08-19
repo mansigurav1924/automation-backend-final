@@ -1,38 +1,84 @@
-const nodemailer = require('nodemailer');
+const { google } = require('googleapis');
 const dotenv = require('dotenv');
 dotenv.config();
 
-const transporter = nodemailer.createTransport({
-  host: 'smtp.gmail.com',  // explicit host forces IPv4 on Render (avoids IPv6 ENETUNREACH)
-  port: 587,
-  secure: false,           // STARTTLS on port 587
-  auth: process.env.GMAIL_CLIENT_ID ? {
-    type: 'OAuth2',
-    user: process.env.EMAIL_USER,
-    clientId: process.env.GMAIL_CLIENT_ID,
-    clientSecret: process.env.GMAIL_CLIENT_SECRET,
-    refreshToken: process.env.GMAIL_REFRESH_TOKEN,
-  } : {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-  },
-});
+// ── OAuth2 client ─────────────────────────────────────────────────────────────
+const oAuth2Client = new google.auth.OAuth2(
+  process.env.GMAIL_CLIENT_ID,
+  process.env.GMAIL_CLIENT_SECRET,
+  process.env.GMAIL_REDIRECT_URI
+);
+oAuth2Client.setCredentials({ refresh_token: process.env.GMAIL_REFRESH_TOKEN });
 
-/**
- * Send the offer email.
- *
- * @param {string} candidateEmail
- * @param {string} candidateName
- * @param {Buffer} pdfBuffer
- * @param {object} [options]
- * @param {string} [options.subject]   - Custom subject (from template)
- * @param {string} [options.htmlBody]  - Custom HTML body (from template)
- */
+// ── Build a base64url-encoded RFC 2822 message ────────────────────────────────
+function buildRawMessage({ to, subject, html, pdfBuffer }) {
+  const boundary = 'BOUNDARY_' + Date.now();
+
+  const headers = [
+    `To: ${to}`,
+    `From: "RGT OfferFlow" <${process.env.EMAIL_USER}>`,
+    `Subject: ${subject}`,
+    'MIME-Version: 1.0',
+    `Content-Type: multipart/mixed; boundary="${boundary}"`,
+  ].join('\r\n');
+
+  // HTML part
+  const htmlPart = [
+    `--${boundary}`,
+    'Content-Type: text/html; charset=utf-8',
+    'Content-Transfer-Encoding: base64',
+    '',
+    Buffer.from(html).toString('base64'),
+  ].join('\r\n');
+
+  // Optional PDF attachment
+  const pdfPart = pdfBuffer && pdfBuffer.length
+    ? [
+        `--${boundary}`,
+        'Content-Type: application/pdf',
+        'Content-Transfer-Encoding: base64',
+        'Content-Disposition: attachment; filename="Offer_Letter.pdf"',
+        '',
+        pdfBuffer.toString('base64'),
+      ].join('\r\n')
+    : '';
+
+  const raw = [headers, '', htmlPart, pdfPart, `--${boundary}--`]
+    .filter(Boolean)
+    .join('\r\n');
+
+  return Buffer.from(raw)
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+}
+
+// ── Low-level sender (used internally) ───────────────────────────────────────
+async function sendEmail({ to, subject, html, pdfBuffer }) {
+  const gmail = google.gmail({ version: 'v1', auth: oAuth2Client });
+  const raw = buildRawMessage({ to, subject, html, pdfBuffer });
+
+  try {
+    const res = await gmail.users.messages.send({
+      userId: 'me',
+      requestBody: { raw },
+    });
+    return res.data;
+  } catch (err) {
+    console.error('Gmail API send error:', err.response?.data || err.message);
+    throw new Error('Failed to send email via Gmail API');
+  }
+}
+
+// ── Public API — preserves the original call signature used across the codebase
+// sendOfferEmail(candidateEmail, candidateName, pdfBuffer, options)
+// ─────────────────────────────────────────────────────────────────────────────
 const sendOfferEmail = async (candidateEmail, candidateName, pdfBuffer, options = {}) => {
   const subject = options.subject
     || `Your Internship Offer Letter from RGTvertex`;
 
-  const htmlBody = options.html
+  const html = options.html
     || `<p>Dear <strong>${candidateName}</strong>,</p>
         <p>Greetings from RGTvertex!</p>
         <p>Congratulations!</p>
@@ -44,22 +90,8 @@ const sendOfferEmail = async (candidateEmail, candidateName, pdfBuffer, options 
         <p>Thank you, and welcome to RGTvertex!</p>
         <p>Warm Regards,<br/><strong>HR Team, RGTvertex</strong></p>`;
 
-  const mailOptions = {
-    from: `"RGTvertex HR" <${process.env.EMAIL_USER}>`,
-    to: candidateEmail,
-    subject,
-    html: htmlBody,
-    attachments: [
-      {
-        filename: 'Offer_Letter.pdf',
-        content: pdfBuffer,
-        contentType: 'application/pdf',
-      },
-    ],
-  };
-
-  const info = await transporter.sendMail(mailOptions);
-  return info;
+  return sendEmail({ to: candidateEmail, subject, html, pdfBuffer });
 };
 
 module.exports = sendOfferEmail;
+module.exports.sendEmail = sendEmail;
