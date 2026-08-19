@@ -1,4 +1,5 @@
-const puppeteer = require('puppeteer');
+const puppeteer = require('puppeteer-core');
+const chromium = require('@sparticuz/chromium');
 const fs = require('fs');
 const path = require('path');
 
@@ -29,9 +30,12 @@ const generatePdf = async (candidateData, options = {}) => {
     }
 
     const browser = await puppeteer.launch({
-      headless: 'new',
-      channel: 'chrome',
-      args: ['--no-sandbox', '--disable-setuid-sandbox']
+      args: chromium.args,
+      defaultViewport: chromium.defaultViewport,
+      executablePath: process.env.NODE_ENV === 'production'
+        ? await chromium.executablePath()
+        : puppeteer.executablePath(),
+      headless: chromium.headless,
     });
     const page = await browser.newPage();
     
