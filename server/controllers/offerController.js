@@ -318,6 +318,13 @@ const resendOffer = async (req, res) => {
     try {
       const emailSubject = emailContent?.subject || `Your Internship Offer Letter from RGTvertex`;
       console.log(`[resendOffer] Sending email → to: ${offer.candidate_email}, subject: "${emailSubject}"`);
+      console.log('[resendOffer] emailContent debug:', {
+        to: offer.candidate_email,
+        subject: emailSubject,
+        htmlLength: emailContent?.html?.length ?? 0,
+        hasPdfBuffer: !!(pdfBuffer && pdfBuffer.length),
+        emailContentKeys: emailContent ? Object.keys(emailContent) : [],
+      });
       await sendOfferEmail(offer.candidate_email, offer.candidate_name, pdfBuffer, emailContent || {});
       emailStatus = 'Sent';
     } catch (e) {
