@@ -1,5 +1,6 @@
 const generatePdf = require('../utils/pdfGenerator');
 const sendOfferEmail = require('../utils/emailSender');
+const { sendEmail } = require('../utils/emailSender');
 const supabase = require('../config/supabaseClient');
 const { z } = require('zod');
 const { resolveEmailContent } = require('./templateController');
@@ -317,15 +318,25 @@ const resendOffer = async (req, res) => {
     let emailStatus = 'Failed';
     try {
       const emailSubject = emailContent?.subject || `Your Internship Offer Letter from RGTvertex`;
+      const emailHtml = emailContent?.html || `<p>Dear <strong>${offer.candidate_name}</strong>,</p><p>Please find your offer letter attached.</p>`;
+
       console.log(`[resendOffer] Sending email → to: ${offer.candidate_email}, subject: "${emailSubject}"`);
       console.log('[resendOffer] emailContent debug:', {
         to: offer.candidate_email,
         subject: emailSubject,
-        htmlLength: emailContent?.html?.length ?? 0,
+        htmlLength: emailHtml.length,
         hasPdfBuffer: !!(pdfBuffer && pdfBuffer.length),
         emailContentKeys: emailContent ? Object.keys(emailContent) : [],
       });
-      await sendOfferEmail(offer.candidate_email, offer.candidate_name, pdfBuffer, emailContent || {});
+
+      await sendEmail({
+        to: offer.candidate_email,
+        subject: emailSubject,
+        html: emailHtml,
+        attachment: pdfBuffer && pdfBuffer.length
+          ? { filename: 'Offer_Letter.pdf', content: pdfBuffer, contentType: 'application/pdf' }
+          : null,
+      });
       emailStatus = 'Sent';
     } catch (e) {
       console.error('[resendOffer] sendEmail failed:', e.message);
