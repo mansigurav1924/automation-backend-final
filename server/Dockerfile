@@ -1,7 +1,13 @@
-FROM ghcr.io/puppeteer/puppeteer:latest
+FROM node:20-slim
 
-# Switch to root to install app dependencies and copy files
-USER root
+# Install Chromium and its dependencies
+RUN apt-get update && apt-get install -y \
+  chromium \
+  --no-install-recommends \
+  && rm -rf /var/lib/apt/lists/*
+
+# Tell Puppeteer to use installed Chromium
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
 WORKDIR /app
 
