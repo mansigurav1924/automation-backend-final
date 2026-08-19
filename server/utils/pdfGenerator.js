@@ -1,5 +1,4 @@
 const puppeteer = require('puppeteer-core');
-const chromium = require('@sparticuz/chromium');
 const fs = require('fs');
 const path = require('path');
 
@@ -29,16 +28,15 @@ const generatePdf = async (candidateData, options = {}) => {
       htmlContent = htmlContent.replace(regex, safeValue);
     }
 
-    const isProduction = process.env.NODE_ENV === 'production';
-    const executablePath = isProduction
-      ? await chromium.executablePath  // property, not a function
-      : '/usr/bin/chromium-browser';   // local fallback
-
     const browser = await puppeteer.launch({
-      args: chromium.args,
-      defaultViewport: chromium.defaultViewport,
-      executablePath,
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
       headless: true,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+      ],
     });
     const page = await browser.newPage();
     
