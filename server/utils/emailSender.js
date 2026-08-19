@@ -10,54 +10,49 @@ const oAuth2Client = new google.auth.OAuth2(
 );
 oAuth2Client.setCredentials({ refresh_token: process.env.GMAIL_REFRESH_TOKEN });
 
-// ── Build a base64url-encoded RFC 2822 message ────────────────────────────────
-function buildRawMessage({ to, subject, html, pdfBuffer }) {
-  const boundary = 'BOUNDARY_' + Date.now();
+// ── Build a base64url-encoded RFC 2822 MIME message ───────────────────────────
+function buildMessage({ to, subject, html, attachment }) {
+  const boundary = 'boundary_' + Date.now();
 
-  const headers = [
+  const messageParts = [
     `To: ${to}`,
     `From: "RGT OfferFlow" <${process.env.EMAIL_USER}>`,
     `Subject: ${subject}`,
     'MIME-Version: 1.0',
     `Content-Type: multipart/mixed; boundary="${boundary}"`,
-  ].join('\r\n');
-
-  // HTML part
-  const htmlPart = [
+    '',
     `--${boundary}`,
     'Content-Type: text/html; charset=utf-8',
-    'Content-Transfer-Encoding: base64',
     '',
-    Buffer.from(html).toString('base64'),
-  ].join('\r\n');
+    html,
+    '',
+  ];
 
-  // Optional PDF attachment
-  const pdfPart = pdfBuffer && pdfBuffer.length
-    ? [
-        `--${boundary}`,
-        'Content-Type: application/pdf',
-        'Content-Transfer-Encoding: base64',
-        'Content-Disposition: attachment; filename="Offer_Letter.pdf"',
-        '',
-        pdfBuffer.toString('base64'),
-      ].join('\r\n')
-    : '';
+  if (attachment && attachment.content) {
+    messageParts.push(
+      `--${boundary}`,
+      `Content-Type: ${attachment.contentType || 'application/pdf'}; name="${attachment.filename}"`,
+      'Content-Transfer-Encoding: base64',
+      `Content-Disposition: attachment; filename="${attachment.filename}"`,
+      '',
+      attachment.content.toString('base64'),
+      ''
+    );
+  }
 
-  const raw = [headers, '', htmlPart, pdfPart, `--${boundary}--`]
-    .filter(Boolean)
-    .join('\r\n');
+  messageParts.push(`--${boundary}--`);
 
-  return Buffer.from(raw)
+  return Buffer.from(messageParts.join('\r\n'))
     .toString('base64')
     .replace(/\+/g, '-')
     .replace(/\//g, '_')
     .replace(/=+$/, '');
 }
 
-// ── Low-level sender (used internally) ───────────────────────────────────────
-async function sendEmail({ to, subject, html, pdfBuffer }) {
+// ── Low-level sender ──────────────────────────────────────────────────────────
+async function sendEmail({ to, subject, html, attachment }) {
   const gmail = google.gmail({ version: 'v1', auth: oAuth2Client });
-  const raw = buildRawMessage({ to, subject, html, pdfBuffer });
+  const raw = buildMessage({ to, subject, html, attachment });
 
   try {
     const res = await gmail.users.messages.send({
@@ -71,8 +66,9 @@ async function sendEmail({ to, subject, html, pdfBuffer }) {
   }
 }
 
-// ── Public API — preserves the original call signature used across the codebase
+// ── Compatibility wrapper — preserves the original call signature ──────────────
 // sendOfferEmail(candidateEmail, candidateName, pdfBuffer, options)
+// Used by: generateOffer, approveOffer, reminderJob
 // ─────────────────────────────────────────────────────────────────────────────
 const sendOfferEmail = async (candidateEmail, candidateName, pdfBuffer, options = {}) => {
   const subject = options.subject
@@ -90,8 +86,14 @@ const sendOfferEmail = async (candidateEmail, candidateName, pdfBuffer, options 
         <p>Thank you, and welcome to RGTvertex!</p>
         <p>Warm Regards,<br/><strong>HR Team, RGTvertex</strong></p>`;
 
-  return sendEmail({ to: candidateEmail, subject, html, pdfBuffer });
+  const attachment = pdfBuffer && pdfBuffer.length
+    ? { filename: 'Offer_Letter.pdf', content: pdfBuffer, contentType: 'application/pdf' }
+    : null;
+
+  return sendEmail({ to: candidateEmail, subject, html, attachment });
 };
 
+// Default export = sendOfferEmail (backward compat for all existing callers)
 module.exports = sendOfferEmail;
+// Named export for new direct usage (e.g. resendOffer)
 module.exports.sendEmail = sendEmail;
