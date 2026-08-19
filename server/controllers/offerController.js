@@ -316,10 +316,17 @@ const resendOffer = async (req, res) => {
 
     let emailStatus = 'Failed';
     try {
+      const emailSubject = emailContent?.subject || `Your Internship Offer Letter from RGTvertex`;
+      console.log(`[resendOffer] Sending email → to: ${offer.candidate_email}, subject: "${emailSubject}"`);
       await sendOfferEmail(offer.candidate_email, offer.candidate_name, pdfBuffer, emailContent || {});
       emailStatus = 'Sent';
     } catch (e) {
-      console.error(e);
+      console.error('[resendOffer] sendEmail failed:', e.message);
+      // Update DB status before surfacing the error
+      await supabase.from('offers').update({ status: 'Failed' }).eq('id', offer.id);
+      syncOfferToSheet({ ...offer, status: 'Failed', manager_email: req.user.email });
+      await logAudit(offer.id, req.user.email, 'resend_failed');
+      return res.status(500).json({ error: `Email sending failed: ${e.message}` });
     }
 
     await supabase.from('offers').update({ status: emailStatus }).eq('id', offer.id);
