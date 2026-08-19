@@ -3,7 +3,9 @@ const dotenv = require('dotenv');
 dotenv.config();
 
 const transporter = nodemailer.createTransport({
-  service: 'gmail',
+  host: 'smtp.gmail.com',  // explicit host forces IPv4 on Render (avoids IPv6 ENETUNREACH)
+  port: 587,
+  secure: false,           // STARTTLS on port 587
   auth: process.env.GMAIL_CLIENT_ID ? {
     type: 'OAuth2',
     user: process.env.EMAIL_USER,
