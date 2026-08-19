@@ -41,9 +41,12 @@ const generatePdf = async (candidateData, options = {}) => {
     try {
       const page = await browser.newPage();
 
+      // Must set these explicitly — per-call timeout option is ignored in puppeteer-core v22
+      page.setDefaultNavigationTimeout(120000);
+      page.setDefaultTimeout(120000);
+
       await page.setContent(htmlContent, {
-        waitUntil: 'domcontentloaded', // faster than networkidle0
-        timeout: 120000,               // 2 min for Render free tier
+        waitUntil: 'domcontentloaded',
       });
 
       // Allow fonts/styles to finish rendering
