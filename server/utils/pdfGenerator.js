@@ -47,7 +47,7 @@ const generatePdf = async (candidateData, options = {}) => {
       });
 
       // Allow fonts/styles to finish rendering
-      await page.waitForTimeout(1000);
+      await new Promise(resolve => setTimeout(resolve, 1000));
 
       const pdfBuffer = await page.pdf({
         format: 'A4',
