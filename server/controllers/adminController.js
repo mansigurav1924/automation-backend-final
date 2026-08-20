@@ -165,48 +165,26 @@ const createUser = async (req, res) => {
 };
 
 const getSystemHealth = async (req, res) => {
+  // Check Google Sheets
+  let sheetsConnected = false;
   try {
-    // Check Google Sheets
-    let sheetsConnected = false;
-    try {
-      await sheets.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID });
-      sheetsConnected = true;
-    } catch (err) {
-      console.error('Sheets health check failed:', err.message);
-    }
-
-    // Check SMTP
-    let smtpConnected = false;
-    try {
-      const transporter = nodemailer.createTransport({
-        service: 'gmail',
-        auth: process.env.GMAIL_CLIENT_ID ? {
-          type: 'OAuth2',
-          user: process.env.EMAIL_USER,
-          clientId: process.env.GMAIL_CLIENT_ID,
-          clientSecret: process.env.GMAIL_CLIENT_SECRET,
-          refreshToken: process.env.GMAIL_REFRESH_TOKEN,
-        } : {
-          user: process.env.EMAIL_USER,
-          pass: process.env.EMAIL_PASS,
-        },
-      });
-      await transporter.verify();
-      smtpConnected = true;
-    } catch (err) {
-      console.error('SMTP health check failed:', err.message);
-    }
-
-    res.status(200).json({
-      googleSheets: sheetsConnected ? 'ok' : 'error',
-      smtp: smtpConnected ? 'ok' : 'error',
-      cronExpiry: expiryStatus.lastRun,
-      cronReminder: reminderStatus.lastRun
-    });
-  } catch (error) {
-    console.error('Error in health check:', error);
-    res.status(500).json({ error: 'Failed to get system health' });
+    await sheets.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID });
+    sheetsConnected = true;
+  } catch (err) {
+    console.error('Sheets health check failed:', err.message);
   }
+
+  // Email check — SMTP verify blocks/crashes on Render free tier
+  // Use presence of RESEND_API_KEY as the indicator instead
+  const smtpConnected = !!process.env.RESEND_API_KEY;
+
+  // Always return 200 — never let health check crash
+  return res.status(200).json({
+    googleSheets: sheetsConnected ? 'ok' : 'error',
+    smtp: smtpConnected ? 'ok' : 'error',
+    cronExpiry: expiryStatus.lastRun || null,
+    cronReminder: reminderStatus.lastRun || null,
+  });
 };
 
 module.exports = {
