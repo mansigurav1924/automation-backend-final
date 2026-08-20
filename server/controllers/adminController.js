@@ -48,40 +48,25 @@ const updateUserRole = async (req, res) => {
   try {
     const { email } = req.params;
     const { role } = req.body;
-    
+
     if (!['hr', 'manager', 'admin'].includes(role)) {
       return res.status(400).json({ error: 'Invalid role provided' });
     }
 
-    // Update in Supabase
-    const { error: sbError } = await supabase
+    const { error } = await supabase
       .from('users')
       .update({ role })
       .eq('email', email);
-      
-    if (sbError) throw sbError;
 
-    // Update in Google Sheets
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'Users!A:E',
-    });
-    
-    const rows = response.data.values || [];
-    const rowIndex = rows.findIndex(row => row[0] === email);
-    
-    if (rowIndex !== -1) {
-      await sheets.spreadsheets.values.update({
-        spreadsheetId: SPREADSHEET_ID,
-        range: `Users!D${rowIndex + 1}`,
-        valueInputOption: 'USER_ENTERED',
-        resource: { values: [[role]] }
-      });
+    if (error) {
+      console.error('Supabase update error:', error);
+      return res.status(500).json({ error: 'Failed to update user role' });
     }
 
+    // Sheets sync skipped — Google Sheets integration currently unavailable
     res.status(200).json({ message: 'User role updated successfully' });
-  } catch (error) {
-    console.error('Error updating user role:', error);
+  } catch (err) {
+    console.error('Error updating user role:', err);
     res.status(500).json({ error: 'Failed to update user role' });
   }
 };
@@ -90,34 +75,20 @@ const deleteUser = async (req, res) => {
   try {
     const { email } = req.params;
 
-    // Delete in Supabase
-    const { error: sbError } = await supabase
+    const { error } = await supabase
       .from('users')
       .delete()
       .eq('email', email);
 
-    if (sbError) throw sbError;
-
-    // Delete from Google Sheets (clear the row)
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'Users!A:A',
-    });
-    
-    const rows = response.data.values || [];
-    const rowIndex = rows.findIndex(row => row[0] === email);
-    
-    if (rowIndex !== -1) {
-      // Clear the row instead of shifting to avoid breaking data sync indexing
-      await sheets.spreadsheets.values.clear({
-        spreadsheetId: SPREADSHEET_ID,
-        range: `Users!A${rowIndex + 1}:H${rowIndex + 1}`,
-      });
+    if (error) {
+      console.error('Supabase delete error:', error);
+      return res.status(500).json({ error: 'Failed to delete user' });
     }
 
+    // Sheets sync skipped — Google Sheets integration currently unavailable
     res.status(200).json({ message: 'User deleted successfully' });
-  } catch (error) {
-    console.error('Error deleting user:', error);
+  } catch (err) {
+    console.error('Error deleting user:', err);
     res.status(500).json({ error: 'Failed to delete user' });
   }
 };
